@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_db(cls, v: str) -> str:
+        # Railway (and some other platforms) provide "postgres://" but
+        # SQLAlchemy 2.0 requires the "postgresql://" scheme.
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql://", 1)
         if not v.startswith("postgresql"):
             raise ValueError("DATABASE_URL must be a PostgreSQL connection string")
         return v
