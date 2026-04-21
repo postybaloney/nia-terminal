@@ -71,6 +71,63 @@ async def cmd_backfill(since: str) -> None:
     settings.backfill_from = original
 
 
+async def cmd_analyze() -> None:
+    """Run AI analysis on patents already in the database, grouped by query."""
+    from analysis import analyze_batch
+    from config import settings
+    from db import get_session
+    from db.models import IngestRun, RawPatent
+    from ingestors.base import NormalizedPatent
+
+    with get_session() as session:
+        latest_run = (
+            session.query(IngestRun.id)
+            .order_by(IngestRun.started_at.desc())
+            .limit(1)
+            .scalar()
+        )
+        if not latest_run:
+            console.print("[red]No ingest runs found. Run 'python main.py run' first.[/red]")
+            return
+
+        rows = (
+            session.query(RawPatent)
+            .filter(RawPatent.matched_query.isnot(None))
+            .all()
+        )
+        # Convert ORM rows to NormalizedPatent so analyze_batch can format them
+        patents_by_query: dict[str, list[NormalizedPatent]] = {}
+        for r in rows:
+            np = NormalizedPatent(
+                source=r.source or "",
+                source_id=r.source_id or "",
+                family_id=None,
+                title=r.title,
+                abstract=r.abstract,
+                filing_date=r.filing_date,
+                grant_date=r.grant_date,
+                assignees=r.assignees or [],
+                inventors=[],
+                cpc_codes=r.cpc_codes or [],
+                ipc_codes=[],
+                matched_query=r.matched_query or "",
+                raw_payload={},
+            )
+            key = r.matched_query or ""
+            patents_by_query.setdefault(key, []).append(np)
+
+    run_id = latest_run
+    console.print(f"[bold]Running AI analysis on existing records (ingest_run_id={run_id})...[/bold]")
+
+    for query, patents in patents_by_query.items():
+        console.print(f"  Analyzing {len(patents)} patents for query {query!r}")
+        analysis = await analyze_batch(patents, query, run_id)
+        if analysis and analysis.themes:
+            console.print(f"  [green]✓[/green] themes={analysis.themes}")
+        else:
+            console.print(f"  [dim]skipped (too few patents or LLM error)[/dim]")
+
+
 async def cmd_digest() -> None:
     from config import settings
     from analysis import generate_weekly_digest
@@ -117,6 +174,7 @@ def main() -> None:
     bf_p = sub.add_parser("backfill", help="Re-ingest from a historical date")
     bf_p.add_argument("--from", dest="since", required=True, help="Start date YYYY-MM-DD")
 
+    sub.add_parser("analyze", help="Run AI analysis on patents already in the database")
     sub.add_parser("digest", help="Generate weekly digest")
     sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
 
@@ -124,6 +182,8 @@ def main() -> None:
 
     if args.command == "init":
         cmd_init()
+    elif args.command == "analyze":
+        asyncio.run(cmd_analyze())
     elif args.command == "run":
         asyncio.run(cmd_run(getattr(args, "source", None)))
     elif args.command == "backfill":
