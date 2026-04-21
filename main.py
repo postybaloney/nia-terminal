@@ -1,0 +1,141 @@
+"""
+CLI entry point for manual operations.
+
+Usage:
+  python main.py init          # create tables
+  python main.py run           # single pipeline run (all sources)
+  python main.py run --source patentsview   # single source
+  python main.py backfill --from 2020-01-01 # re-index from a date
+  python main.py digest        # generate and print weekly digest
+  python main.py scheduler     # start the cron scheduler (blocking)
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
+
+
+async def cmd_run(source_filter: str | None) -> None:
+    from analysis import analyze_batch
+    from config import settings
+    from pipeline import run_pipeline
+
+    console.print("[bold]Running patent ingestion pipeline...[/bold]")
+    result = await run_pipeline()
+
+    table = Table(title="Pipeline Result")
+    table.add_column("Metric", style="dim")
+    table.add_column("Value", style="bold")
+    table.add_row("New patents", str(result.new_patents))
+    table.add_row("Updated", str(result.updated_patents))
+    table.add_row("Total fetched", str(result.total_fetched))
+    table.add_row("Errors", str(len(result.errors)))
+    console.print(table)
+
+    if result.errors:
+        for err in result.errors:
+            console.print(f"[red]  Error: {err}[/red]")
+
+    if result.new_patents >= settings.analysis_min_new:
+        console.print("\n[bold]Running AI analysis...[/bold]")
+        for query in settings.query_list:
+            relevant = [p for p in result.new_records if p.matched_query == query]
+            if relevant:
+                analysis = await analyze_batch(relevant, query, result.ingest_run_id)
+                if analysis and analysis.themes:
+                    console.print(f"  [green]✓[/green] {query!r}: themes={analysis.themes}")
+    else:
+        console.print(
+            f"\n[dim]Skipping analysis ({result.new_patents} new patents < "
+            f"min threshold {settings.analysis_min_new})[/dim]"
+        )
+
+
+async def cmd_backfill(since: str) -> None:
+    from config import settings
+    original = settings.backfill_from
+    settings.backfill_from = since  # override for this run
+    console.print(f"[bold]Backfill from {since}...[/bold]")
+    await cmd_run(None)
+    settings.backfill_from = original
+
+
+async def cmd_digest() -> None:
+    from config import settings
+    from analysis import generate_weekly_digest
+    from db import get_session
+    from db.models import AnalysisResult
+
+    with get_session() as session:
+        latest = (
+            session.query(AnalysisResult)
+            .order_by(AnalysisResult.created_at.desc())
+            .first()
+        )
+
+    digest = await generate_weekly_digest(
+        new_count=0,
+        sources=["patentsview", "epo", "lens", "bigquery"],
+        queries=settings.query_list,
+        latest_analysis=latest,
+    )
+    console.print("\n[bold]--- WEEKLY PATENT INTELLIGENCE DIGEST ---[/bold]\n")
+    console.print(digest)
+
+
+def cmd_init() -> None:
+    from db import init_db
+    init_db()
+    console.print("[green]✓ Database tables created[/green]")
+
+
+def cmd_scheduler() -> None:
+    import scheduler as sched_module
+    sched_module.main()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Patent Intelligence CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("init", help="Initialize database tables")
+
+    run_p = sub.add_parser("run", help="Run ingestion pipeline once")
+    run_p.add_argument("--source", help="Limit to one source (patentsview|epo|lens|bigquery)")
+
+    bf_p = sub.add_parser("backfill", help="Re-ingest from a historical date")
+    bf_p.add_argument("--from", dest="since", required=True, help="Start date YYYY-MM-DD")
+
+    sub.add_parser("digest", help="Generate weekly digest")
+    sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
+
+    args = parser.parse_args()
+
+    if args.command == "init":
+        cmd_init()
+    elif args.command == "run":
+        asyncio.run(cmd_run(getattr(args, "source", None)))
+    elif args.command == "backfill":
+        asyncio.run(cmd_backfill(args.since))
+    elif args.command == "digest":
+        asyncio.run(cmd_digest())
+    elif args.command == "scheduler":
+        cmd_scheduler()
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

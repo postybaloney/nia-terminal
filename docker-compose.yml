@@ -1,0 +1,101 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: patent_intel
+      POSTGRES_USER: patent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U patent -d patent_intel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── DB init (runs once, exits) ──────────────────────────────────────────────
+  init:
+    build: .
+    command: python main.py init
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://patent:${POSTGRES_PASSWORD:-changeme}@db:5432/patent_intel
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Ingestion scheduler ─────────────────────────────────────────────────────
+  scheduler:
+    build: .
+    command: python main.py scheduler
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://patent:${POSTGRES_PASSWORD:-changeme}@db:5432/patent_intel
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp/key.json
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      # Mount GCP service account key if using BigQuery
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/gcp/key.json:ro
+
+  # ── FastAPI REST API ────────────────────────────────────────────────────────
+  api:
+    build: .
+    command: >
+      uvicorn app:app
+        --host 0.0.0.0
+        --port 8000
+        --workers 2
+        --log-level info
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://patent:${POSTGRES_PASSWORD:-changeme}@db:5432/patent_intel
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Dashboard (Bloomberg-style terminal) ───────────────────────────────────
+  dashboard:
+    build: .
+    command: python dashboard.py
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://patent:${POSTGRES_PASSWORD:-changeme}@db:5432/patent_intel
+    ports:
+      - "8050:8050"
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8050/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:

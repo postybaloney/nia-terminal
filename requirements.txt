@@ -1,0 +1,53 @@
+# Core
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.13.0
+db
+
+# HTTP
+httpx>=0.27.0
+tenacity>=8.3.0
+
+# API layer
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Config
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+
+# XML parsing for EPO OPS
+lxml>=5.2.0
+
+# Utilities
+rich>=13.7.0
+structlog>=24.1.0
+pandas>=2.2.0
+
+# Dashboard
+dash>=2.17.0
+dash-bootstrap-components>=1.6.0
+plotly>=5.22.0
+
+# ── LLM backends — install only what you need ─────────────────────────────────
+#
+# FREE options (pick one):
+groq>=0.9.0                       # Best free option — Llama 3.3 70B, fast
+# google-generativeai>=0.7.0      # Gemini free tier — uncomment to use
+# ollama>=0.2.0                   # Local models — uncomment to use
+# huggingface_hub>=0.23.0         # HF Inference API — uncomment to use
+#
+# PAID option:
+# anthropic>=0.28.0               # Claude API — uncomment if you have a key
+
+# Google BigQuery (optional — only needed if using BigQuery source)
+# google-cloud-bigquery>=3.21.0
+# db-dtypes>=1.2.0
+
+# Test
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
