@@ -18,9 +18,16 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import Input, Output, dash_table, dcc, html
 
-from db import get_session
+from db import get_session, init_db
 from db.models import AnalysisResult, IngestRun, RawPatent
 from sqlalchemy import func
+
+# Ensure tables exist (safe to call repeatedly — CREATE TABLE IF NOT EXISTS)
+try:
+    init_db()
+except Exception as _db_init_err:
+    import logging
+    logging.getLogger(__name__).warning("DB init skipped: %s", _db_init_err)
 
 # ── Colour palette (Bloomberg amber-on-black) ─────────────────────────────────
 BG     = "#050810"
@@ -512,13 +519,29 @@ app.layout = html.Div(
     Input("tick", "n_intervals"),
 )
 def refresh(_n: int):
-    kpis        = _kpis()
-    cpc_dist    = _cpc_distribution(20)
-    monthly, top = _cpc_over_time(5)
-    assignees   = _top_assignees(15)
-    runs        = _ingestion_history(30)
-    patents     = _patent_table(500)
-    analyses    = _latest_analyses(5)
+    try:
+        kpis         = _kpis()
+        cpc_dist     = _cpc_distribution(20)
+        monthly, top = _cpc_over_time(5)
+        assignees    = _top_assignees(15)
+        runs         = _ingestion_history(30)
+        patents      = _patent_table(500)
+        analyses     = _latest_analyses(5)
+    except Exception as exc:
+        empty = _empty_fig(f"DB error: {exc}")
+        no_data_msg = html.Div(
+            f"Database error: {exc}",
+            style={"color": RED, "fontFamily": MONO, "padding": "16px", "fontSize": "12px"},
+        )
+        kpi_row = [
+            _kpi_card("Total Patents", "—", "waiting for data", DIM),
+            _kpi_card("New (7 days)",  "—", "waiting for data", DIM),
+            _kpi_card("Last Ingest",   "—", "no runs yet",      DIM),
+            _kpi_card("Last Analysis", "—", "no runs yet",      DIM),
+        ]
+        return (kpi_row, empty, empty, empty, empty, no_data_msg, [],
+                "— no data yet —",
+                f"Last refreshed {datetime.now().strftime('%H:%M:%S')}")
 
     kpi_row = [
         _kpi_card("Total Patents",   f"{kpis['total']:,}",        "in database",                AMBER),
