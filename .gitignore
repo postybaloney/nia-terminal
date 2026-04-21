@@ -9,6 +9,7 @@
 service-account*.json
 gcp-key*.json
 *credentials*.json
+config.py
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
