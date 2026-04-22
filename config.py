@@ -38,14 +38,14 @@ class Settings(BaseSettings):
     # Register free at https://data.uspto.gov/apis/getting-started
     # Endpoint: https://api.uspto.gov/api/v1/patent/applications/search
     # Auth: X-API-KEY header
-    uspto_api_key: str = ""
+    uspto_api_key: str = "bwqppmilyuhnmtdrfywkaldygpszyp"
 
     # EPO OPS — register free at https://developers.epo.org
-    epo_client_id: str = ""
-    epo_client_secret: str = ""
+    epo_client_id: str = " tDA8Tmz10J9rS9DXwUTbIom7Dch17fOyY8JduDiTVHOVEJ8A"
+    epo_client_secret: str = "nWBLsUnPTezlIDgZRuNaGAoQRStB8oB8mhZmaJKG0Wlz5qxHcCCGgHc8C4h3gpsy"
 
     # Lens.org — free tier at https://lens.org/lens/user/subscriptions
-    lens_api_key: str = ""
+    lens_api_key: str = "FPIddqmgcp0kXwoQVyiofv2cHy1uS3eJJbZb7VM6Ozcv5vH09GCM"
 
     # Google BigQuery (optional)
     bigquery_project_id: str = ""
@@ -58,9 +58,9 @@ class Settings(BaseSettings):
     slack_webhook_url: str = ""
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
-    digest_email_to: str = ""
+    smtp_user: str = "parthrudesai@gmail.com"
+    smtp_password: str = "dpay hxxj awgf kwtv"
+    digest_email_to: str = "pdesai@epsilonsolutionsllc.com"
 
     # ── Search ────────────────────────────────────────────────────────────────
     search_queries: str = (
