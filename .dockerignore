@@ -1,0 +1,17 @@
+# Never bake secrets into the image — these are injected at runtime
+.env
+*.env
+!.env.example
+
+# No need to copy these into the image
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.claude/
+*.log
+*.tmp
+README.md

@@ -168,8 +168,8 @@ def _upsert_patents(
                     family_id=family_id,
                     title=patent.title,
                     abstract=patent.abstract,
-                    earliest_filing_date=patent.filing_date,
-                    earliest_grant_date=patent.grant_date,
+                    earliest_filing_date=patent.filing_date.replace(tzinfo=None) if patent.filing_date else None,
+                    earliest_grant_date=patent.grant_date.replace(tzinfo=None) if patent.grant_date else None,
                     assignees=patent.assignees or [],
                     inventors=patent.inventors or [],
                     cpc_codes=patent.cpc_codes or [],
@@ -195,8 +195,8 @@ def _upsert_patents(
                     family_id=family_id,
                     title=patent.title,
                     abstract=patent.abstract,
-                    filing_date=patent.filing_date,
-                    grant_date=patent.grant_date,
+                    filing_date=patent.filing_date.replace(tzinfo=None) if patent.filing_date else None,
+                    grant_date=patent.grant_date.replace(tzinfo=None) if patent.grant_date else None,
                     assignees=patent.assignees,
                     inventors=patent.inventors,
                     cpc_codes=patent.cpc_codes,
@@ -236,6 +236,11 @@ def _merge_family(family: PatentFamily, patent: NormalizedPatent) -> None:
         family.sources = list(existing_sources | {patent.source})
 
     # Update earliest dates
+    # Strip timezone info before comparing — the DB stores naive datetimes
+    # but some ingestors (EPO, Lens) return timezone-aware ones.
     if patent.filing_date:
-        if not family.earliest_filing_date or patent.filing_date < family.earliest_filing_date:
-            family.earliest_filing_date = patent.filing_date
+        filing = patent.filing_date.replace(tzinfo=None)
+        existing = family.earliest_filing_date
+        existing_naive = existing.replace(tzinfo=None) if existing else None
+        if not existing_naive or filing < existing_naive:
+            family.earliest_filing_date = filing
