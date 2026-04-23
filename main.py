@@ -128,27 +128,40 @@ async def cmd_analyze() -> None:
             console.print(f"  [dim]skipped (too few patents or LLM error)[/dim]")
 
 
-async def cmd_digest() -> None:
+async def cmd_digest(send: bool = False) -> None:
     from config import settings
     from analysis import generate_weekly_digest
     from db import get_session
-    from db.models import AnalysisResult
+    from db.models import AnalysisResult, IngestRun
+    from notifiers import dispatch_digest
 
     with get_session() as session:
+        from sqlalchemy import func
         latest = (
             session.query(AnalysisResult)
             .order_by(AnalysisResult.created_at.desc())
             .first()
         )
+        if latest:
+            session.expunge(latest)
+        total_new = (
+            session.query(func.sum(IngestRun.new_patents))
+            .scalar() or 0
+        )
 
     digest = await generate_weekly_digest(
-        new_count=0,
+        new_count=total_new,
         sources=["patentsview", "epo", "lens", "bigquery"],
         queries=settings.query_list,
         latest_analysis=latest,
     )
     console.print("\n[bold]--- WEEKLY PATENT INTELLIGENCE DIGEST ---[/bold]\n")
     console.print(digest)
+
+    if send:
+        console.print("\n[bold]Dispatching digest via email/Slack...[/bold]")
+        await dispatch_digest(digest_text=digest, new_count=total_new, run_id=0)
+        console.print("[green]✓ Dispatch complete[/green]")
 
 
 def cmd_init() -> None:
@@ -175,7 +188,8 @@ def main() -> None:
     bf_p.add_argument("--from", dest="since", required=True, help="Start date YYYY-MM-DD")
 
     sub.add_parser("analyze", help="Run AI analysis on patents already in the database")
-    sub.add_parser("digest", help="Generate weekly digest")
+    digest_p = sub.add_parser("digest", help="Generate weekly digest")
+    digest_p.add_argument("--send", action="store_true", help="Send via email/Slack after printing")
     sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
 
     args = parser.parse_args()
@@ -189,7 +203,7 @@ def main() -> None:
     elif args.command == "backfill":
         asyncio.run(cmd_backfill(args.since))
     elif args.command == "digest":
-        asyncio.run(cmd_digest())
+        asyncio.run(cmd_digest(send=getattr(args, "send", False)))
     elif args.command == "scheduler":
         cmd_scheduler()
     else:

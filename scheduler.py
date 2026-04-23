@@ -52,6 +52,33 @@ def _parse_cron(expr: str) -> dict:
     )
 
 
+async def _send_weekly_digest() -> None:
+    """Send the weekly digest email/Slack regardless of new patent count."""
+    from db import get_session
+    from db.models import AnalysisResult, IngestRun
+    from sqlalchemy import func
+
+    log.info("scheduler: generating weekly digest")
+    with get_session() as session:
+        latest = (
+            session.query(AnalysisResult)
+            .order_by(AnalysisResult.created_at.desc())
+            .first()
+        )
+        if latest:
+            session.expunge(latest)
+        total_new = session.query(func.sum(IngestRun.new_patents)).scalar() or 0
+
+    digest = await generate_weekly_digest(
+        new_count=total_new,
+        sources=["patentsview", "epo", "lens", "bigquery"],
+        queries=settings.query_list,
+        latest_analysis=latest,
+    )
+    await dispatch_digest(digest_text=digest, new_count=total_new, run_id=0)
+    log.info("scheduler: weekly digest dispatched")
+
+
 async def _run_full_pipeline() -> None:
     log.info("scheduler: pipeline starting")
 
@@ -111,9 +138,18 @@ def main() -> None:
         trigger=CronTrigger(**cron_kwargs),
         id="patent_pipeline",
         name="Patent ingestion + analysis",
-        max_instances=1,          # never overlap runs
-        misfire_grace_time=3600,  # retry up to 1hr after missed trigger
+        max_instances=1,
+        misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        lambda: asyncio.run(_send_weekly_digest()),
+        trigger=CronTrigger(day_of_week="mon", hour=8, minute=0),
+        id="weekly_digest",
+        name="Weekly digest email/Slack",
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    log.info("scheduler: pipeline cron=%s  digest=every Monday 08:00 UTC", settings.schedule_cron)
 
     try:
         scheduler.start()

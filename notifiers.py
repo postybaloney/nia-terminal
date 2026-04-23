@@ -186,22 +186,19 @@ async def dispatch_digest(
     Send digest to all configured channels.
     Called from scheduler.py after a successful run.
     """
-    import os
+    from config import settings
 
-    slack_url = os.getenv("SLACK_WEBHOOK_URL", "")
-    if slack_url:
-        await send_slack_digest(digest_text, slack_url, new_count, run_id)
+    if settings.slack_webhook_url:
+        await send_slack_digest(digest_text, settings.slack_webhook_url, new_count, run_id)
 
-    smtp_host = os.getenv("SMTP_HOST", "")
-    if smtp_host:
-        to_raw = os.getenv("DIGEST_EMAIL_TO", "")
-        to_addrs = [a.strip() for a in to_raw.split(",") if a.strip()]
+    if settings.smtp_host and settings.smtp_user and settings.digest_email_to:
+        to_addrs = [a.strip() for a in settings.digest_email_to.split(",") if a.strip()]
         send_email_digest(
             digest_text=digest_text,
-            smtp_host=smtp_host,
-            smtp_port=int(os.getenv("SMTP_PORT", "587")),
-            smtp_user=os.getenv("SMTP_USER", ""),
-            smtp_password=os.getenv("SMTP_PASSWORD", ""),
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_user=settings.smtp_user,
+            smtp_password=settings.smtp_password,
             to_addresses=to_addrs,
             new_count=new_count,
         )
