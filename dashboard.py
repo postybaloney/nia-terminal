@@ -52,6 +52,41 @@ SERIES_COLORS = [AMBER, TEAL, BLUE, PURPLE, GREEN]
 
 MONO = "'Courier New', monospace"
 
+# ── CPC code descriptions (4-char subclass prefix) ────────────────────────────
+_CPC_DESC: dict[str, str] = {
+    "A61B": "Diagnosis; surgery; identification",
+    "A61F": "Implantable filters/prostheses; bandages; wound treatment",
+    "A61K": "Medical/dental/cosmetic preparations",
+    "A61L": "Sterilization or disinfection; bandages/dressings",
+    "A61M": "Devices for introducing media into or onto the body",
+    "A61N": "Electrotherapy; magnetotherapy; radiation therapy; ultrasound",
+    "A61P": "Specific therapeutic activity of chemical compounds",
+    "A61Q": "Specific use of cosmetics or similar preparations",
+    "B33Y": "Additive manufacturing (3D printing)",
+    "C12N": "Microorganisms; enzymes; genetic engineering",
+    "C12Q": "Measuring/testing processes involving nucleic acids/enzymes",
+    "G06F": "Electric digital data processing",
+    "G06N": "Computing using AI / neural network models",
+    "G06T": "Image data processing or generation",
+    "G16H": "Healthcare informatics — medical data/records",
+    "H04L": "Transmission of digital information",
+    "H04W": "Wireless communications networks",
+}
+
+def _cpc_label(code: str) -> str:
+    """Return 'CODE — description' for a 4-char CPC prefix."""
+    return _CPC_DESC.get(code, f"CPC subclass {code}")
+
+def _patent_url(source: str, source_id: str) -> str:
+    """Return a public URL for a patent given its source and ID."""
+    sid = (source_id or "").strip()
+    if source == "lens":
+        return f"https://lens.org/lens/patent/{sid}"
+    elif source == "epo":
+        return f"https://worldwide.espacenet.com/patent/search?q=pn%3D{sid}"
+    else:  # patentsview / uspto
+        return f"https://patents.google.com/patent/US{sid}/en"
+
 
 # ── Data helpers  (all return plain Python — no detached ORM objects) ─────────
 
@@ -170,6 +205,7 @@ def _patent_table(limit: int = 500) -> list[dict]:
     for r in rows:
         date = r.grant_date or r.filing_date or r.first_seen_at
         assignee = ((r.assignees or [{}])[0].get("name") or "") if r.assignees else ""
+        url = _patent_url(r.source or "", r.source_id or "")
         data.append({
             "Date": date.strftime("%Y-%m-%d") if date else "",
             "Source": r.source or "",
@@ -178,6 +214,7 @@ def _patent_table(limit: int = 500) -> list[dict]:
             "Assignee": assignee[:40],
             "Query": (r.matched_query or "")[:50],
             "CPC": ", ".join((r.cpc_codes or [])[:3]),
+            "Link": f"[↗ View]({url})" if url else "",
         })
     return data
 
@@ -218,40 +255,54 @@ def _chart_layout(**extra):
 
 def _fig_cpc_bar(top_codes: list[tuple[str, int]]) -> go.Figure:
     if not top_codes:
-        return _empty_fig("No CPC data yet")
+        return _empty_fig("No CPC data yet — run pipeline to ingest Lens/EPO patents")
     codes, counts = zip(*top_codes)
+    descs = [_cpc_label(c) for c in codes]
     fig = go.Figure(go.Bar(
         x=list(counts), y=list(codes), orientation="h",
         marker_color=AMBER, marker_line_width=0,
-        hovertemplate="%{y}: %{x}<extra></extra>",
+        customdata=descs,
+        hovertemplate="<b>%{y}</b>  ·  %{x} patents<br>%{customdata}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text="CPC Code Distribution (top 20)", font=dict(color=AMBER, size=12)),
+        title=dict(
+            text="CPC Code Distribution (top 20)"
+                 "<br><sup style='color:#6b7280'>Cooperative Patent Classification — "
+                 "international standard for categorising patent technology</sup>",
+            font=dict(color=AMBER, size=12),
+        ),
         yaxis=dict(autorange="reversed", tickfont=dict(size=9), **GRID),
         xaxis=dict(tickfont=dict(size=9, color=DIM), **GRID),
-        **_chart_layout(),
+        **_chart_layout(margin=dict(l=10, r=10, t=52, b=10)),
     )
     return fig
 
 
 def _fig_cpc_trends(monthly_data: list, top_codes: list[str]) -> go.Figure:
     if not monthly_data or not top_codes:
-        return _empty_fig("No CPC trend data yet")
+        return _empty_fig("No CPC trend data yet — run pipeline to ingest Lens/EPO patents")
     months = [m for m, _ in monthly_data]
     fig = go.Figure()
     for i, code in enumerate(top_codes):
         y = [counts.get(code, 0) for _, counts in monthly_data]
         fig.add_trace(go.Scatter(
-            x=months, y=y, name=code, mode="lines+markers",
+            x=months, y=y,
+            name=f"{code} — {_cpc_label(code)}",
+            mode="lines+markers",
             line=dict(color=SERIES_COLORS[i % len(SERIES_COLORS)], width=2),
             marker=dict(size=5),
+            hovertemplate=f"<b>{code}</b>  %{{x}}<br>%{{y}} patents<br>{_cpc_label(code)}<extra></extra>",
         ))
     fig.update_layout(
-        title=dict(text="CPC Family Trends by Grant Month", font=dict(color=AMBER, size=12)),
-        legend=dict(font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15),
+        title=dict(
+            text="CPC Family Trends by Grant Month"
+                 "<br><sup style='color:#6b7280'>Monthly filing volume per CPC subclass</sup>",
+            font=dict(color=AMBER, size=12),
+        ),
+        legend=dict(font=dict(color=TEXT, size=9), bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.2),
         xaxis=dict(tickfont=dict(size=9, color=DIM), **GRID),
         yaxis=dict(tickfont=dict(size=9, color=DIM), **GRID),
-        **_chart_layout(margin=dict(l=10, r=10, t=36, b=40)),
+        **_chart_layout(margin=dict(l=10, r=10, t=52, b=50)),
     )
     return fig
 
@@ -461,13 +512,16 @@ app.layout = html.Div(
                            "borderBottom": f"1px solid {BORDER}"}),
                 dash_table.DataTable(
                     id="patent-table",
-                    columns=[{"name": c, "id": c}
-                             for c in ["Date", "Source", "Patent ID", "Title",
-                                       "Assignee", "Query", "CPC"]],
+                    columns=[
+                        *[{"name": c, "id": c} for c in
+                          ["Date", "Source", "Patent ID", "Title", "Assignee", "Query", "CPC"]],
+                        {"name": "Link", "id": "Link", "presentation": "markdown"},
+                    ],
                     data=[],
                     page_size=20,
                     filter_action="native",
                     sort_action="native",
+                    markdown_options={"link_target": "_blank"},
                     style_table={"overflowX": "auto"},
                     style_cell={
                         "background": CARD2, "color": TEXT,
