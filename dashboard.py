@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import dash
 import dash_bootstrap_components as dbc
@@ -51,6 +51,47 @@ GRID = dict(gridcolor=BORDER, zerolinecolor=BORDER)
 SERIES_COLORS = [AMBER, TEAL, BLUE, PURPLE, GREEN]
 
 MONO = "'Courier New', monospace"
+
+# ── Period helpers ────────────────────────────────────────────────────────────
+
+def _period_since(period: str) -> datetime | None:
+    """Return a UTC cutoff datetime for distribution/ranking filters."""
+    now = datetime.now(timezone.utc)
+    return {"daily": now - timedelta(days=1),
+            "weekly": now - timedelta(weeks=1),
+            "monthly": now - timedelta(days=30)}.get(period)
+
+
+def _period_bucket(dt, period: str) -> str:
+    """Return a string bucket key for a date/datetime given a period."""
+    if period == "daily":
+        return dt.strftime("%Y-%m-%d")
+    elif period == "weekly":
+        week_start = dt - timedelta(days=dt.weekday())
+        return week_start.strftime("%Y-%m-%d")
+    return dt.strftime("%Y-%m")
+
+
+def _period_label(period: str) -> str:
+    return {"daily": "Last 24 h", "weekly": "Last 7 days", "monthly": "Last 30 days"}.get(period, "")
+
+
+def _period_toggle(toggle_id: str, default: str = "monthly") -> html.Div:
+    """Small D/W/M radio toggle for chart cards."""
+    return html.Div(
+        dcc.RadioItems(
+            id=toggle_id,
+            options=[{"label": l, "value": v} for l, v in
+                     [("DAILY", "daily"), ("WEEKLY", "weekly"), ("MONTHLY", "monthly")]],
+            value=default,
+            inline=True,
+            labelStyle={"color": DIM, "fontSize": "8px", "fontFamily": MONO,
+                        "marginLeft": "10px", "cursor": "pointer", "letterSpacing": "1px"},
+            inputStyle={"marginRight": "2px", "accentColor": AMBER},
+        ),
+        style={"textAlign": "right", "paddingBottom": "2px"},
+    )
+
 
 # ── CPC code descriptions (4-char subclass prefix) ────────────────────────────
 _CPC_DESC: dict[str, str] = {
@@ -114,9 +155,14 @@ def _kpis() -> dict:
     }
 
 
-def _cpc_distribution(limit: int = 20) -> list[tuple[str, int]]:
+def _cpc_distribution(limit: int = 20, period: str = "monthly") -> list[tuple[str, int]]:
+    since = _period_since(period)
     with get_session() as s:
-        rows = s.query(RawPatent.cpc_codes).filter(RawPatent.cpc_codes.isnot(None)).all()
+        q = s.query(RawPatent.cpc_codes).filter(RawPatent.cpc_codes.isnot(None))
+        if since:
+            since_naive = since.replace(tzinfo=None)
+            q = q.filter(RawPatent.first_seen_at >= since_naive)
+        rows = q.all()
     counter: Counter = Counter()
     for (codes,) in rows:
         if isinstance(codes, list):
@@ -127,38 +173,50 @@ def _cpc_distribution(limit: int = 20) -> list[tuple[str, int]]:
     return counter.most_common(limit)
 
 
-def _cpc_over_time(top_n: int = 5) -> tuple[list, list]:
+def _cpc_over_time(top_n: int = 5, period: str = "monthly") -> tuple[list, list]:
+    since = _period_since(period)
     with get_session() as s:
-        rows = (
-            s.query(RawPatent.grant_date, RawPatent.cpc_codes)
-            .filter(RawPatent.grant_date.isnot(None), RawPatent.cpc_codes.isnot(None))
-            .all()
-        )
+        q = s.query(
+            RawPatent.grant_date, RawPatent.filing_date,
+            RawPatent.first_seen_at, RawPatent.cpc_codes,
+        ).filter(RawPatent.cpc_codes.isnot(None))
+        if since:
+            since_naive = since.replace(tzinfo=None)
+            q = q.filter(RawPatent.first_seen_at >= since_naive)
+        rows = q.all()
+
     all_codes: Counter = Counter()
-    for _, codes in rows:
+    for _, _, _, codes in rows:
         if isinstance(codes, list):
             for c in codes:
                 p = c[:4] if c else None
                 if p:
                     all_codes[p] += 1
     top = [code for code, _ in all_codes.most_common(top_n)]
-    monthly: dict[str, Counter] = {}
-    for grant_date, codes in rows:
-        if not grant_date or not isinstance(codes, list):
+
+    buckets: dict[str, Counter] = {}
+    for grant_date, filing_date, first_seen_at, codes in rows:
+        date = grant_date or filing_date or first_seen_at
+        if not date or not isinstance(codes, list):
             continue
-        month = grant_date.strftime("%Y-%m")
-        if month not in monthly:
-            monthly[month] = Counter()
+        bucket = _period_bucket(date, period)
+        if bucket not in buckets:
+            buckets[bucket] = Counter()
         for c in codes:
             p = c[:4] if c else None
             if p in top:
-                monthly[month][p] += 1
-    return sorted(monthly.items()), top
+                buckets[bucket][p] += 1
+    return sorted(buckets.items()), top
 
 
-def _top_assignees(limit: int = 15) -> list[tuple[str, int]]:
+def _top_assignees(limit: int = 15, period: str = "monthly") -> list[tuple[str, int]]:
+    since = _period_since(period)
     with get_session() as s:
-        rows = s.query(RawPatent.assignees).filter(RawPatent.assignees.isnot(None)).all()
+        q = s.query(RawPatent.assignees).filter(RawPatent.assignees.isnot(None))
+        if since:
+            since_naive = since.replace(tzinfo=None)
+            q = q.filter(RawPatent.first_seen_at >= since_naive)
+        rows = q.all()
     counter: Counter = Counter()
     for (assignees,) in rows:
         if isinstance(assignees, list):
@@ -169,24 +227,37 @@ def _top_assignees(limit: int = 15) -> list[tuple[str, int]]:
     return counter.most_common(limit)
 
 
-def _ingestion_history(limit: int = 30) -> list[dict]:
+def _ingestion_history(limit: int = 60, period: str = "monthly") -> list[dict]:
     with get_session() as s:
         runs = (
             s.query(IngestRun.started_at, IngestRun.new_patents, IngestRun.updated_patents,
                     IngestRun.errors, IngestRun.success)
             .order_by(IngestRun.started_at.asc())
-            .limit(limit)
             .all()
         )
-    return [
-        {
-            "date": r.started_at.strftime("%m/%d %H:%M") if r.started_at else "",
-            "new": r.new_patents or 0,
-            "updated": r.updated_patents or 0,
-            "errors": len(r.errors or []),
-        }
-        for r in runs
-    ]
+
+    if period in ("monthly", "weekly"):
+        buckets: dict[str, dict] = {}
+        for r in runs:
+            if not r.started_at:
+                continue
+            bucket = _period_bucket(r.started_at, period)
+            if bucket not in buckets:
+                buckets[bucket] = {"date": bucket, "new": 0, "updated": 0, "errors": 0}
+            buckets[bucket]["new"] += r.new_patents or 0
+            buckets[bucket]["updated"] += r.updated_patents or 0
+            buckets[bucket]["errors"] += len(r.errors or [])
+        return list(buckets.values())[-limit:]
+    else:  # daily — individual runs
+        return [
+            {
+                "date": r.started_at.strftime("%m/%d %H:%M") if r.started_at else "",
+                "new": r.new_patents or 0,
+                "updated": r.updated_patents or 0,
+                "errors": len(r.errors or []),
+            }
+            for r in runs
+        ][-limit:]
 
 
 def _patent_table(limit: int = 500) -> list[dict]:
@@ -255,7 +326,7 @@ def _chart_layout(**extra):
     return base
 
 
-def _fig_cpc_bar(top_codes: list[tuple[str, int]]) -> go.Figure:
+def _fig_cpc_bar(top_codes: list[tuple[str, int]], period: str = "monthly") -> go.Figure:
     if not top_codes:
         return _empty_fig("No CPC data yet — run pipeline to ingest Lens/EPO patents")
     codes, counts = zip(*top_codes)
@@ -266,11 +337,10 @@ def _fig_cpc_bar(top_codes: list[tuple[str, int]]) -> go.Figure:
         customdata=descs,
         hovertemplate="<b>%{y}</b>  ·  %{x} patents<br>%{customdata}<extra></extra>",
     ))
+    period_note = _period_label(period)
     fig.update_layout(
         title=dict(
-            text="CPC Code Distribution (top 20)"
-                 "<br><sup style='color:#6b7280'>Cooperative Patent Classification — "
-                 "international standard for categorising patent technology</sup>",
+            text=f"CPC Code Distribution (top 20)  ·  {period_note}<br><sup>Cooperative Patent Classification — international standard for categorising patent technology</sup>",
             font=dict(color=AMBER, size=12),
         ),
         yaxis=dict(autorange="reversed", tickfont=dict(size=9), **GRID),
@@ -280,7 +350,7 @@ def _fig_cpc_bar(top_codes: list[tuple[str, int]]) -> go.Figure:
     return fig
 
 
-def _fig_cpc_trends(monthly_data: list, top_codes: list[str]) -> go.Figure:
+def _fig_cpc_trends(monthly_data: list, top_codes: list[str], period: str = "monthly") -> go.Figure:
     if not monthly_data or not top_codes:
         return _empty_fig("No CPC trend data yet — run pipeline to ingest Lens/EPO patents")
     months = [m for m, _ in monthly_data]
@@ -295,10 +365,11 @@ def _fig_cpc_trends(monthly_data: list, top_codes: list[str]) -> go.Figure:
             marker=dict(size=5),
             hovertemplate=f"<b>{code}</b>  %{{x}}<br>%{{y}} patents<br>{_cpc_label(code)}<extra></extra>",
         ))
+    period_note = _period_label(period)
+    x_label = {"daily": "date", "weekly": "week start", "monthly": "month"}.get(period, "period")
     fig.update_layout(
         title=dict(
-            text="CPC Family Trends by Grant Month"
-                 "<br><sup style='color:#6b7280'>Monthly filing volume per CPC subclass</sup>",
+            text=f"CPC Family Trends  ·  {period_note}<br><sup>Patent volume per CPC subclass by {x_label} (grant › filing › ingest date)</sup>",
             font=dict(color=AMBER, size=12),
         ),
         legend=dict(font=dict(color=TEXT, size=9), bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.2),
@@ -309,18 +380,19 @@ def _fig_cpc_trends(monthly_data: list, top_codes: list[str]) -> go.Figure:
     return fig
 
 
-def _fig_assignees(top: list[tuple[str, int]]) -> go.Figure:
+def _fig_assignees(top: list[tuple[str, int]], period: str = "monthly") -> go.Figure:
     if not top:
         return _empty_fig("No assignee data yet")
     names, counts = zip(*top)
     names = [n[:30] + "…" if len(n) > 30 else n for n in names]
+    period_note = _period_label(period)
     fig = go.Figure(go.Bar(
         x=list(counts), y=list(names), orientation="h",
         marker_color=TEAL, marker_line_width=0,
         hovertemplate="%{y}: %{x}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text="Top Assignees by Patent Count", font=dict(color=AMBER, size=12)),
+        title=dict(text=f"Top Assignees  ·  {period_note}", font=dict(color=AMBER, size=12)),
         yaxis=dict(autorange="reversed", tickfont=dict(size=9), **GRID),
         xaxis=dict(tickfont=dict(size=9, color=DIM), **GRID),
         **_chart_layout(),
@@ -328,15 +400,16 @@ def _fig_assignees(top: list[tuple[str, int]]) -> go.Figure:
     return fig
 
 
-def _fig_ingestion(runs: list[dict]) -> go.Figure:
+def _fig_ingestion(runs: list[dict], period: str = "monthly") -> go.Figure:
     if not runs:
         return _empty_fig("No ingestion runs yet")
     dates = [r["date"] for r in runs]
+    period_note = _period_label(period)
     fig = go.Figure()
     fig.add_trace(go.Bar(x=dates, y=[r["new"] for r in runs], name="New", marker_color=GREEN))
     fig.add_trace(go.Bar(x=dates, y=[r["updated"] for r in runs], name="Updated", marker_color=BLUE))
     fig.update_layout(
-        title=dict(text="Ingestion History", font=dict(color=AMBER, size=12)),
+        title=dict(text=f"Ingestion History  ·  {period_note}", font=dict(color=AMBER, size=12)),
         barmode="stack",
         legend=dict(font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)"),
         xaxis=dict(tickfont=dict(size=9, color=DIM), **GRID),
@@ -413,10 +486,9 @@ def _analysis_panel(analyses: list[dict]) -> html.Div:
     return html.Div(items)
 
 
-# ── UI component helpers (cont.) ─────────────────────────────────────────────
-
-def _chart_card(child) -> html.Div:
-    return html.Div(child, style={
+def _chart_card(child, toggle: html.Div | None = None) -> html.Div:
+    contents = ([toggle] if toggle else []) + [child]
+    return html.Div(contents, style={
         "background": CARD, "border": f"1px solid {BORDER}",
         "borderRadius": "2px", "padding": "8px",
     })
@@ -470,19 +542,43 @@ app.layout = html.Div(
 
             # Row 1: CPC distribution | Ingestion history
             dbc.Row([
-                dbc.Col(_chart_card(dcc.Graph(id="cpc-bar", config={"displayModeBar": False},
-                                              style={"height": "320px"})), md=6),
-                dbc.Col(_chart_card(dcc.Graph(id="ingestion-chart", config={"displayModeBar": False},
-                                              style={"height": "320px"})), md=6),
+                dbc.Col(
+                    _chart_card(
+                        dcc.Graph(id="cpc-bar", config={"displayModeBar": False},
+                                  style={"height": "320px"}),
+                        toggle=_period_toggle("cpc-bar-period"),
+                    ),
+                    md=6,
+                ),
+                dbc.Col(
+                    _chart_card(
+                        dcc.Graph(id="ingestion-chart", config={"displayModeBar": False},
+                                  style={"height": "320px"}),
+                        toggle=_period_toggle("ingestion-period"),
+                    ),
+                    md=6,
+                ),
             ], className="g-2"),
             html.Div(style={"height": "10px"}),
 
             # Row 2: CPC trends (wide) | Top assignees
             dbc.Row([
-                dbc.Col(_chart_card(dcc.Graph(id="cpc-trends", config={"displayModeBar": False},
-                                              style={"height": "300px"})), md=7),
-                dbc.Col(_chart_card(dcc.Graph(id="assignees-bar", config={"displayModeBar": False},
-                                              style={"height": "300px"})), md=5),
+                dbc.Col(
+                    _chart_card(
+                        dcc.Graph(id="cpc-trends", config={"displayModeBar": False},
+                                  style={"height": "300px"}),
+                        toggle=_period_toggle("cpc-trend-period"),
+                    ),
+                    md=7,
+                ),
+                dbc.Col(
+                    _chart_card(
+                        dcc.Graph(id="assignees-bar", config={"displayModeBar": False},
+                                  style={"height": "300px"}),
+                        toggle=_period_toggle("assignees-period"),
+                    ),
+                    md=5,
+                ),
             ], className="g-2"),
             html.Div(style={"height": "10px"}),
 
@@ -559,31 +655,26 @@ app.layout = html.Div(
 )
 
 
-# ── Single callback refreshes everything ──────────────────────────────────────
+# ── Callbacks — one per chart so each toggle fires independently ──────────────
+
+def _error_fig(exc: Exception) -> go.Figure:
+    return _empty_fig(f"DB error: {exc}")
+
 
 @app.callback(
     Output("kpi-row", "children"),
-    Output("cpc-bar", "figure"),
-    Output("cpc-trends", "figure"),
-    Output("assignees-bar", "figure"),
-    Output("ingestion-chart", "figure"),
     Output("analysis-panel", "children"),
     Output("patent-table", "data"),
     Output("table-count", "children"),
     Output("last-updated", "children"),
     Input("tick", "n_intervals"),
 )
-def refresh(_n: int):
+def refresh_static(_n: int):
     try:
-        kpis         = _kpis()
-        cpc_dist     = _cpc_distribution(20)
-        monthly, top = _cpc_over_time(5)
-        assignees    = _top_assignees(15)
-        runs         = _ingestion_history(30)
-        patents      = _patent_table(500)
-        analyses     = _latest_analyses(5)
+        kpis     = _kpis()
+        patents  = _patent_table(500)
+        analyses = _latest_analyses(5)
     except Exception as exc:
-        empty = _empty_fig(f"DB error: {exc}")
         no_data_msg = html.Div(
             f"Database error: {exc}",
             style={"color": RED, "fontFamily": MONO, "padding": "16px", "fontSize": "12px"},
@@ -594,7 +685,7 @@ def refresh(_n: int):
             _kpi_card("Last Ingest",   "—", "no runs yet",      DIM),
             _kpi_card("Last Analysis", "—", "no runs yet",      DIM),
         ]
-        return (kpi_row, empty, empty, empty, empty, no_data_msg, [],
+        return (kpi_row, no_data_msg, [],
                 "— no data yet —",
                 f"Last refreshed {datetime.now().strftime('%H:%M:%S')}")
 
@@ -604,18 +695,62 @@ def refresh(_n: int):
         _kpi_card("Last Ingest Run", kpis["last_run_at"],           "pipeline completed",           BLUE),
         _kpi_card("Last Analysis",   kpis["last_analysis_at"],      kpis["last_analysis_query"],    TEAL),
     ]
-
     return (
         kpi_row,
-        _fig_cpc_bar(cpc_dist),
-        _fig_cpc_trends(monthly, top),
-        _fig_assignees(assignees),
-        _fig_ingestion(runs),
         _analysis_panel(analyses),
         patents,
         f"— showing latest {len(patents):,} records — filter by any column",
         f"Last refreshed {datetime.now().strftime('%H:%M:%S')}",
     )
+
+
+@app.callback(
+    Output("cpc-bar", "figure"),
+    Input("tick", "n_intervals"),
+    Input("cpc-bar-period", "value"),
+)
+def refresh_cpc_bar(_n: int, period: str):
+    try:
+        return _fig_cpc_bar(_cpc_distribution(20, period), period)
+    except Exception as exc:
+        return _error_fig(exc)
+
+
+@app.callback(
+    Output("cpc-trends", "figure"),
+    Input("tick", "n_intervals"),
+    Input("cpc-trend-period", "value"),
+)
+def refresh_cpc_trends(_n: int, period: str):
+    try:
+        monthly, top = _cpc_over_time(5, period)
+        return _fig_cpc_trends(monthly, top, period)
+    except Exception as exc:
+        return _error_fig(exc)
+
+
+@app.callback(
+    Output("assignees-bar", "figure"),
+    Input("tick", "n_intervals"),
+    Input("assignees-period", "value"),
+)
+def refresh_assignees(_n: int, period: str):
+    try:
+        return _fig_assignees(_top_assignees(15, period), period)
+    except Exception as exc:
+        return _error_fig(exc)
+
+
+@app.callback(
+    Output("ingestion-chart", "figure"),
+    Input("tick", "n_intervals"),
+    Input("ingestion-period", "value"),
+)
+def refresh_ingestion(_n: int, period: str):
+    try:
+        return _fig_ingestion(_ingestion_history(60, period), period)
+    except Exception as exc:
+        return _error_fig(exc)
 
 
 if __name__ == "__main__":
