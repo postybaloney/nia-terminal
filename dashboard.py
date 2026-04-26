@@ -250,7 +250,9 @@ def _latest_analyses(limit: int = 5) -> list[dict]:
 # ── Chart builders ────────────────────────────────────────────────────────────
 
 def _chart_layout(**extra):
-    return dict(**CHART_BG, **CHART_FONT, **CHART_MARGIN, **extra)
+    base = {**CHART_BG, **CHART_FONT, **CHART_MARGIN}
+    base.update(extra)  # extra overrides base keys (e.g. custom margin)
+    return base
 
 
 def _fig_cpc_bar(top_codes: list[tuple[str, int]]) -> go.Figure:
