@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import dash
 import dash_bootstrap_components as dbc
@@ -58,8 +58,6 @@ MONO = "'Courier New', monospace"
 def _kpis() -> dict:
     with get_session() as s:
         total    = s.query(func.count(RawPatent.id)).scalar() or 0
-        since    = datetime.now(timezone.utc) - timedelta(days=7)
-        new_7d   = s.query(func.count(RawPatent.id)).filter(RawPatent.first_seen_at >= since).scalar() or 0
         last_run = (
             s.query(IngestRun.started_at, IngestRun.new_patents)
             .order_by(IngestRun.started_at.desc())
@@ -70,11 +68,12 @@ def _kpis() -> dict:
             .order_by(AnalysisResult.created_at.desc())
             .first()
         )
+    last_run_new = last_run.new_patents or 0 if last_run else 0
+    last_run_at  = last_run.started_at.strftime("%m/%d %H:%M") if last_run else "—"
     return {
         "total": total,
-        "new_7d": new_7d,
-        "last_run_at": last_run.started_at.strftime("%m/%d %H:%M") if last_run else "—",
-        "last_run_new": last_run.new_patents or 0 if last_run else 0,
+        "last_run_new": last_run_new,
+        "last_run_at": last_run_at,
         "last_analysis_at": last_analysis.created_at.strftime("%m/%d %H:%M") if last_analysis else "—",
         "last_analysis_query": (last_analysis.query or "")[:40] if last_analysis else "",
     }
@@ -534,8 +533,8 @@ def refresh(_n: int):
             style={"color": RED, "fontFamily": MONO, "padding": "16px", "fontSize": "12px"},
         )
         kpi_row = [
-            _kpi_card("Total Patents", "—", "waiting for data", DIM),
-            _kpi_card("New (7 days)",  "—", "waiting for data", DIM),
+            _kpi_card("Total Patents",  "—", "waiting for data", DIM),
+            _kpi_card("New (Last Run)", "—", "waiting for data", DIM),
             _kpi_card("Last Ingest",   "—", "no runs yet",      DIM),
             _kpi_card("Last Analysis", "—", "no runs yet",      DIM),
         ]
@@ -544,10 +543,10 @@ def refresh(_n: int):
                 f"Last refreshed {datetime.now().strftime('%H:%M:%S')}")
 
     kpi_row = [
-        _kpi_card("Total Patents",   f"{kpis['total']:,}",        "in database",                AMBER),
-        _kpi_card("New (7 days)",    f"{kpis['new_7d']:,}",       "freshly ingested",           GREEN),
-        _kpi_card("Last Ingest Run", kpis["last_run_at"],         f"{kpis['last_run_new']} new", BLUE),
-        _kpi_card("Last Analysis",   kpis["last_analysis_at"],    kpis["last_analysis_query"],  TEAL),
+        _kpi_card("Total Patents",   f"{kpis['total']:,}",          "in database",                  AMBER),
+        _kpi_card("New (Last Run)",  f"{kpis['last_run_new']:,}",   f"ingested {kpis['last_run_at']}", GREEN),
+        _kpi_card("Last Ingest Run", kpis["last_run_at"],           "pipeline completed",           BLUE),
+        _kpi_card("Last Analysis",   kpis["last_analysis_at"],      kpis["last_analysis_query"],    TEAL),
     ]
 
     return (
