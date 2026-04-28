@@ -56,11 +56,18 @@ class Settings(BaseSettings):
 
     # ── Notifications ─────────────────────────────────────────────────────────
     slack_webhook_url: str = ""
+
+    # Resend (recommended for Railway — HTTP API, no port restrictions)
+    # Sign up free at https://resend.com, set RESEND_API_KEY + RESEND_FROM
+    resend_api_key: str = ""
+    resend_from: str = ""          # e.g. "Patent Intel <noreply@yourdomain.com>"
+
+    # SMTP fallback (works locally; Railway blocks outbound SMTP ports)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    smtp_user: str = "parthrudesai@gmail.com"
-    smtp_password: str = "dpay hxxj awgf kwtv"
-    digest_email_to: str = "pdesai@epsilonsolutionsllc.com"
+    smtp_user: str = ""
+    smtp_password: str = ""
+    digest_email_to: str = ""
 
     # ── Search ────────────────────────────────────────────────────────────────
     search_queries: str = (
