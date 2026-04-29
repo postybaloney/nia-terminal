@@ -106,14 +106,19 @@ async def run_pipeline() -> PipelineResult:
 
     log.info("pipeline: total fetched across all sources: %d", len(all_patents))
 
-    # Quality gate — reject records that have neither a title nor an abstract.
-    # These are useless for analysis and search (typically bare USPTO metadata stubs).
-    quality_filtered = [p for p in all_patents if p.title or p.abstract]
+    # Quality gate — require an abstract.
+    # Records without an abstract are useless for AI analysis and search.
+    # (ODP/USPTO records have titles but no abstracts — Lens covers them better.)
+    quality_filtered = [p for p in all_patents if p.abstract and p.abstract.strip()]
     dropped = len(all_patents) - len(quality_filtered)
     if dropped:
+        by_source: dict[str, int] = {}
+        for p in all_patents:
+            if not (p.abstract and p.abstract.strip()):
+                by_source[p.source] = by_source.get(p.source, 0) + 1
         log.info(
-            "pipeline: quality gate dropped %d records with no title or abstract",
-            dropped,
+            "pipeline: quality gate dropped %d records without abstract: %s",
+            dropped, by_source,
         )
     all_patents = quality_filtered
 

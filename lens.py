@@ -22,10 +22,11 @@ Response field notes (v1.6.5 schema):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config import settings
 from ingestors.base import BaseIngestor, NormalizedPatent
@@ -33,6 +34,15 @@ from ingestors.base import BaseIngestor, NormalizedPatent
 log = logging.getLogger(__name__)
 
 _BASE = "https://api.lens.org/patent/search"
+_MAX_SIZE = 100          # Lens free tier hard cap — requests with size>100 return 400
+_REQUEST_DELAY = 6.5     # seconds between queries (free tier: 10 req/min)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Only retry on network errors and 5xx responses — never on 400/401/403."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError))
 
 
 class LensIngestor(BaseIngestor):
@@ -45,13 +55,23 @@ class LensIngestor(BaseIngestor):
 
         results: list[NormalizedPatent] = []
         async with httpx.AsyncClient(timeout=30) as client:
-            for query_str in self.queries:
-                patents = await self._fetch_query(client, query_str)
-                results.extend(patents)
-                log.info("lens: query=%r  fetched=%d", query_str, len(patents))
+            for i, query_str in enumerate(self.queries):
+                if i > 0:
+                    await asyncio.sleep(_REQUEST_DELAY)
+                try:
+                    patents = await self._fetch_query(client, query_str)
+                    results.extend(patents)
+                    log.info("lens: query=%r  fetched=%d", query_str, len(patents))
+                except Exception as exc:
+                    log.warning("lens: query=%r  error=%s", query_str, exc)
         return results
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(min=2, max=15),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
     async def _fetch_query(
         self, client: httpx.AsyncClient, query_str: str
     ) -> list[NormalizedPatent]:
@@ -59,6 +79,7 @@ class LensIngestor(BaseIngestor):
             "Authorization": f"Bearer {settings.lens_api_key}",
             "Content-Type": "application/json",
         }
+        size = min(self.per_page, _MAX_SIZE)   # never exceed Lens free-tier cap
         body = {
             "query": {
                 "bool": {
@@ -78,22 +99,26 @@ class LensIngestor(BaseIngestor):
                     ]
                 }
             },
-            "size": self.per_page,
+            "size": size,
             "sort": [{"date_published": "desc"}],
-            # Only top-level response field names are valid here (no dot-paths).
             "include": [
                 "lens_id",
                 "doc_number",
                 "jurisdiction",
                 "publication_type",
                 "date_published",
-                "abstract",     # list of {text, lang}
-                "biblio",       # invention_title, parties, classifications, references_cited
-                "families",     # simple_family / extended_family membership
+                "abstract",
+                "biblio",
+                "families",
             ],
         }
 
         resp = await client.post(_BASE, headers=headers, json=body)
+        if not resp.is_success:
+            log.error(
+                "lens: HTTP %d for query=%r — %s",
+                resp.status_code, query_str, resp.text[:300],
+            )
         resp.raise_for_status()
         data = resp.json()
 

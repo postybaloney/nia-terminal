@@ -161,7 +161,7 @@ def _cpc_distribution(limit: int = 20, period: str = "monthly") -> list[tuple[st
     with get_session() as s:
         q = s.query(RawPatent.cpc_codes).filter(
             RawPatent.cpc_codes.isnot(None),
-            or_(RawPatent.title.isnot(None), RawPatent.abstract.isnot(None)),
+            RawPatent.abstract.isnot(None),
         )
         if since:
             since_naive = since.replace(tzinfo=None)
@@ -185,7 +185,7 @@ def _cpc_over_time(top_n: int = 5, period: str = "monthly") -> tuple[list, list]
             RawPatent.first_seen_at, RawPatent.cpc_codes,
         ).filter(
             RawPatent.cpc_codes.isnot(None),
-            or_(RawPatent.title.isnot(None), RawPatent.abstract.isnot(None)),
+            RawPatent.abstract.isnot(None),
         )
         if since:
             since_naive = since.replace(tzinfo=None)
@@ -221,7 +221,7 @@ def _top_assignees(limit: int = 15, period: str = "monthly") -> list[tuple[str, 
     with get_session() as s:
         q = s.query(RawPatent.assignees).filter(
             RawPatent.assignees.isnot(None),
-            or_(RawPatent.title.isnot(None), RawPatent.abstract.isnot(None)),
+            RawPatent.abstract.isnot(None),
         )
         if since:
             since_naive = since.replace(tzinfo=None)
@@ -279,7 +279,7 @@ def _patent_table(limit: int = 500) -> list[dict]:
                 RawPatent.assignees, RawPatent.matched_query, RawPatent.cpc_codes,
             )
             # Only show records that have at least a title or abstract (quality gate)
-            .filter(or_(RawPatent.title.isnot(None), RawPatent.abstract.isnot(None)))
+            .filter(RawPatent.abstract.isnot(None))
             .order_by(RawPatent.first_seen_at.desc())
             .limit(limit)
             .all()
@@ -357,7 +357,7 @@ def _search_patents(
 
         filters = [
             # Quality gate — exclude bare stubs with neither title nor abstract
-            or_(RawPatent.title.isnot(None), RawPatent.abstract.isnot(None)),
+            RawPatent.abstract.isnot(None),
         ]
         if mq:
             # Exact matched_query lookup (from "N patents" click in analysis panel)

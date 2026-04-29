@@ -20,3 +20,41 @@
     color: #fbbf24 !important;
     text-decoration: underline;
 }
+
+/* ── Thesis browser DataTable link styles ──────────────────────────────────── */
+
+/* Title column: amber link, underline on hover */
+[data-dash-column="Title"] a {
+    color: #f59e0b;
+    text-decoration: none;
+    transition: color 0.12s ease, text-decoration 0.12s ease;
+}
+[data-dash-column="Title"] a:hover {
+    color: #fbbf24;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+/* Author column: teal link (ORCID), underline on hover */
+[data-dash-column="Author"] a {
+    color: #14b8a6;
+    text-decoration: none;
+    transition: color 0.12s ease;
+}
+[data-dash-column="Author"] a:hover {
+    color: #2dd4bf;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+/* Links column: dim secondary links */
+[data-dash-column="Links"] a {
+    color: #6b7280;
+    text-decoration: none;
+    font-size: 9px;
+    transition: color 0.12s ease;
+}
+[data-dash-column="Links"] a:hover {
+    color: #9ca3af;
+    text-decoration: underline;
+}

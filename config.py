@@ -69,6 +69,38 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     digest_email_to: str = ""
 
+    # ── Thesis sources ────────────────────────────────────────────────────────
+    # Add your email as OPENALEX_EMAIL to join OpenAlex polite pool (100k req/day)
+    openalex_email: str = ""
+
+    # EThOS API key (optional — basic search works without it)
+    ethos_api_key: str = ""
+
+    # Thesis search queries (comma-separated)
+    thesis_queries: str = (
+        "neural interface hardware implant,"
+        "brain computer interface BCI decoding,"
+        "deep brain stimulation closed loop,"
+        "neuroprosthetics motor cortex rehabilitation,"
+        "cochlear retinal prosthesis auditory visual,"
+        "implantable medical device biocompatible,"
+        "microelectrode array neural recording,"
+        "medical signal processing deep learning EEG,"
+        "neuromorphic computing chip hardware,"
+        "biosensor wearable continuous monitoring,"
+        "surgical robot minimally invasive,"
+        "medical image segmentation diagnosis AI,"
+        "spinal cord stimulation pain management,"
+        "cardiac pacemaker defibrillator implant,"
+        "federated learning clinical healthcare privacy"
+    )
+
+    # Earliest year to include theses from
+    thesis_since_year: int = 2018
+
+    # Optional extra keywords for hardware/software relevance filter (comma-separated)
+    thesis_extra_keywords: str = ""
+
     # ── Search ────────────────────────────────────────────────────────────────
     search_queries: str = (
         # ── Neurotech: stimulation & implants ────────────────────────────────
@@ -132,6 +164,14 @@ class Settings(BaseSettings):
     @property
     def query_list(self) -> list[str]:
         return [q.strip() for q in self.search_queries.split(",") if q.strip()]
+
+    @property
+    def thesis_query_list(self) -> list[str]:
+        return [q.strip() for q in self.thesis_queries.split(",") if q.strip()]
+
+    @property
+    def thesis_extra_keywords_list(self) -> list[str]:
+        return [k.strip() for k in self.thesis_extra_keywords.split(",") if k.strip()]
 
     @property
     def epo_enabled(self) -> bool:
