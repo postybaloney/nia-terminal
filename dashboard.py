@@ -20,7 +20,8 @@ from dash import Input, Output, dash_table, dcc, html
 
 from db import get_session, init_db
 from db.models import AnalysisResult, IngestRun, RawPatent
-from sqlalchemy import func
+from sqlalchemy import cast, func, or_
+from sqlalchemy import Text as SAText
 
 # Ensure tables exist (safe to call repeatedly — CREATE TABLE IF NOT EXISTS)
 try:
@@ -316,6 +317,160 @@ def _latest_analyses(limit: int = 5) -> list[dict]:
             "patent_count": r.patent_count or 0,
         })
     return results
+
+
+# ── Search ────────────────────────────────────────────────────────────────────
+
+def _search_patents(
+    query: str = "",
+    cpc_filter: str = "",
+    source_filter: str = "all",
+    limit: int = 100,
+) -> list[dict]:
+    """Full-text ILIKE search over title + abstract, with optional CPC/source filters."""
+    q = (query or "").strip()
+    cpc = (cpc_filter or "").strip().upper()
+    if not q and not cpc:
+        return []
+
+    with get_session() as s:
+        stmt = s.query(
+            RawPatent.source, RawPatent.source_id,
+            RawPatent.title, RawPatent.abstract,
+            RawPatent.assignees, RawPatent.cpc_codes,
+            RawPatent.filing_date, RawPatent.grant_date, RawPatent.first_seen_at,
+            RawPatent.matched_query,
+        )
+
+        filters = []
+        if q:
+            filters.append(or_(
+                RawPatent.title.ilike(f"%{q}%"),
+                RawPatent.abstract.ilike(f"%{q}%"),
+            ))
+        if cpc:
+            # Cast the JSONB array to text and search for the prefix
+            filters.append(cast(RawPatent.cpc_codes, SAText).ilike(f'%"{cpc}%'))
+        if source_filter and source_filter != "all":
+            filters.append(RawPatent.source == source_filter)
+
+        if filters:
+            stmt = stmt.filter(*filters)
+
+        rows = stmt.order_by(RawPatent.first_seen_at.desc()).limit(limit).all()
+
+    results = []
+    for r in rows:
+        date = r.grant_date or r.filing_date or r.first_seen_at
+        assignee = ((r.assignees or [{}])[0].get("name") or "") if r.assignees else ""
+        results.append({
+            "source": r.source or "",
+            "source_id": r.source_id or "",
+            "title": r.title or "—",
+            "abstract": r.abstract or "",
+            "assignee": assignee,
+            "cpc_codes": r.cpc_codes or [],
+            "date": date.strftime("%Y-%m-%d") if date else "",
+            "url": _patent_url(r.source or "", r.source_id or ""),
+            "matched_query": r.matched_query or "",
+        })
+    return results
+
+
+def _render_search_results(results: list[dict]) -> list:
+    """Render search results as Bloomberg-styled patent cards."""
+    if not results:
+        return [html.Div(
+            "No results. Try broader terms or clear the CPC filter.",
+            style={"color": DIM, "fontFamily": MONO, "fontSize": "12px", "padding": "12px 0"},
+        )]
+
+    source_color = {"lens": TEAL, "epo": GREEN, "patentsview": BLUE, "bigquery": PURPLE}
+    cards = []
+
+    for r in results:
+        color = source_color.get(r["source"], DIM)
+
+        # CPC badges — show up to 5, each with description on hover
+        cpc_badges = []
+        for code in (r["cpc_codes"] or [])[:5]:
+            prefix = code[:4] if code else ""
+            desc = _CPC_DESC.get(prefix, f"CPC {prefix}")
+            cpc_badges.append(html.Span(
+                code[:8],
+                title=desc,
+                style={
+                    "background": "#1a2035", "color": AMBER,
+                    "fontSize": "9px", "fontFamily": MONO,
+                    "padding": "1px 6px", "borderRadius": "2px",
+                    "marginRight": "4px",
+                    "border": f"1px solid {AMBER}44",
+                    "cursor": "default",
+                },
+            ))
+
+        abstract = (r["abstract"] or "").strip()
+        abstract_preview = abstract[:400] + ("…" if len(abstract) > 400 else "")
+
+        cards.append(html.Div([
+            # ── Top row: source · CPC badges · date ──
+            html.Div([
+                html.Span(
+                    r["source"].upper(),
+                    style={"color": color, "fontSize": "9px", "fontFamily": MONO,
+                           "fontWeight": "bold", "letterSpacing": "1px",
+                           "marginRight": "10px"},
+                ),
+                *cpc_badges,
+                html.Span(
+                    r["date"],
+                    style={"color": DIM, "fontSize": "9px", "fontFamily": MONO,
+                           "float": "right"},
+                ),
+            ], style={"marginBottom": "6px"}),
+
+            # ── Title as clickable link ──
+            html.A(
+                [r["title"], html.Span(" ↗", style={"fontSize": "10px", "opacity": "0.6"})],
+                href=r["url"],
+                target="_blank",
+                style={
+                    "color": AMBER, "fontFamily": MONO, "fontSize": "13px",
+                    "fontWeight": "bold", "textDecoration": "none",
+                    "lineHeight": "1.4", "display": "block", "marginBottom": "4px",
+                },
+            ),
+
+            # ── Assignee ──
+            html.Div(
+                r["assignee"] or "Assignee unknown",
+                style={"color": TEAL if r["assignee"] else DIM,
+                       "fontSize": "11px", "fontFamily": MONO, "marginBottom": "6px"},
+            ),
+
+            # ── Abstract ──
+            html.Div(
+                abstract_preview or "No abstract available.",
+                style={"color": TEXT, "fontSize": "11px", "fontFamily": MONO,
+                       "lineHeight": "1.7", "opacity": "0.85"},
+            ),
+
+            # ── Patent ID (small, bottom) ──
+            html.Div(
+                f"ID: {r['source_id']}  ·  matched query: {r['matched_query'][:60]}" if r["matched_query"] else f"ID: {r['source_id']}",
+                style={"color": DIM, "fontSize": "9px", "fontFamily": MONO,
+                       "marginTop": "8px", "letterSpacing": "0.5px"},
+            ),
+        ], style={
+            "background": CARD2,
+            "border": f"1px solid {BORDER}",
+            "borderLeft": f"3px solid {color}",
+            "borderRadius": "2px",
+            "padding": "12px 16px",
+            "marginBottom": "8px",
+        }))
+
+    return cards
 
 
 # ── Chart builders ────────────────────────────────────────────────────────────
@@ -649,6 +804,89 @@ app.layout = html.Div(
             ], style={"background": CARD, "border": f"1px solid {BORDER}",
                        "borderRadius": "2px", "padding": "16px 20px"}))], className="g-2"),
 
+            html.Div(style={"height": "10px"}),
+
+            # Row 5: Patent Search
+            dbc.Row([dbc.Col(html.Div([
+
+                # ── Section header ──
+                html.Div([
+                    html.Span("PATENT SEARCH",
+                              style={"color": AMBER, "fontSize": "10px", "fontFamily": MONO,
+                                     "letterSpacing": "2px"}),
+                    html.Span("  ·  full-text search across title & abstract",
+                              style={"color": DIM, "fontSize": "10px", "fontFamily": MONO}),
+                ], style={"marginBottom": "14px", "paddingBottom": "8px",
+                           "borderBottom": f"1px solid {BORDER}"}),
+
+                # ── Search bar row ──
+                html.Div([
+                    dcc.Input(
+                        id="search-input",
+                        type="text",
+                        placeholder="Search patents by keyword, technology, assignee…",
+                        debounce=False,
+                        style={
+                            "flex": "1", "background": BG, "color": TEXT,
+                            "border": f"1px solid {BORDER}", "borderRadius": "2px",
+                            "padding": "8px 12px", "fontFamily": MONO, "fontSize": "12px",
+                            "outline": "none",
+                        },
+                    ),
+                    dcc.Input(
+                        id="search-cpc",
+                        type="text",
+                        placeholder="CPC prefix  e.g. A61B",
+                        maxLength=8,
+                        style={
+                            "width": "160px", "background": BG, "color": TEXT,
+                            "border": f"1px solid {BORDER}", "borderRadius": "2px",
+                            "padding": "8px 12px", "fontFamily": MONO, "fontSize": "12px",
+                            "outline": "none",
+                        },
+                    ),
+                    dcc.Dropdown(
+                        id="search-source",
+                        options=[
+                            {"label": "All sources", "value": "all"},
+                            {"label": "Lens.org",    "value": "lens"},
+                            {"label": "EPO",         "value": "epo"},
+                            {"label": "USPTO ODP",   "value": "patentsview"},
+                        ],
+                        value="all",
+                        clearable=False,
+                        style={
+                            "width": "150px", "fontFamily": MONO, "fontSize": "11px",
+                            "background": BG,
+                        },
+                    ),
+                    html.Button(
+                        "SEARCH",
+                        id="search-btn",
+                        n_clicks=0,
+                        style={
+                            "background": AMBER, "color": BG,
+                            "border": "none", "borderRadius": "2px",
+                            "padding": "8px 20px", "fontFamily": MONO,
+                            "fontSize": "11px", "fontWeight": "bold",
+                            "letterSpacing": "1px", "cursor": "pointer",
+                        },
+                    ),
+                ], style={"display": "flex", "gap": "8px",
+                           "alignItems": "center", "marginBottom": "10px"}),
+
+                # ── Result count ──
+                html.Div(id="search-count",
+                         style={"color": DIM, "fontSize": "10px", "fontFamily": MONO,
+                                "marginBottom": "10px"}),
+
+                # ── Results ──
+                html.Div(id="search-results"),
+
+            ], style={"background": CARD, "border": f"1px solid {BORDER}",
+                       "borderRadius": "2px", "padding": "16px 20px"}))],
+                className="g-2"),
+
             html.Div(style={"height": "28px"}),
         ], fluid=True),
     ],
@@ -751,6 +989,39 @@ def refresh_ingestion(_n: int, period: str):
         return _fig_ingestion(_ingestion_history(60, period), period)
     except Exception as exc:
         return _error_fig(exc)
+
+
+@app.callback(
+    Output("search-results", "children"),
+    Output("search-count", "children"),
+    Input("search-btn", "n_clicks"),
+    Input("search-input", "n_submit"),
+    dash.dependencies.State("search-input", "value"),
+    dash.dependencies.State("search-cpc", "value"),
+    dash.dependencies.State("search-source", "value"),
+    prevent_initial_call=True,
+)
+def do_search(_clicks, _submit, query: str, cpc: str, source: str):
+    q = (query or "").strip()
+    cpc = (cpc or "").strip()
+    if not q and not cpc:
+        return [], html.Span("Enter a keyword or CPC prefix to search.",
+                             style={"color": DIM, "fontFamily": MONO, "fontSize": "11px"})
+    try:
+        results = _search_patents(q, cpc, source or "all", limit=100)
+    except Exception as exc:
+        return (
+            [html.Div(f"Search error: {exc}",
+                      style={"color": RED, "fontFamily": MONO, "fontSize": "12px"})],
+            "",
+        )
+    count_label = (
+        f"-- {len(results)} result{'s' if len(results) != 1 else ''}"
+        + (f" for '{q}'" if q else "")
+        + (f"  |  CPC: {cpc.upper()}" if cpc else "")
+        + ("  |  showing first 100" if len(results) == 100 else "")
+    )
+    return _render_search_results(results), count_label
 
 
 if __name__ == "__main__":
