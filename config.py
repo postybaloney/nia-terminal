@@ -71,13 +71,43 @@ class Settings(BaseSettings):
 
     # ── Search ────────────────────────────────────────────────────────────────
     search_queries: str = (
-        "neurotech neural stimulation brain electrode,"
-        "brain computer interface cortical,"
-        "neural implant deep brain stimulation,"
-        "neuroprosthetics motor cortex,"
-        "medical device biosensor implantable"
+        # ── Neurotech: stimulation & implants ────────────────────────────────
+        "neural stimulation brain electrode implant,"
+        "deep brain stimulation Parkinson tremor,"
+        "spinal cord stimulation neuromodulation chronic pain,"
+        "brain computer interface BCI cortical neural decoding,"
+        "neuroprosthetics motor cortex limb rehabilitation,"
+        "transcranial magnetic stimulation TMS tDCS,"
+        "vagus nerve stimulation epilepsy depression,"
+        "cochlear implant auditory brainstem prosthesis,"
+        "retinal prosthesis visual implant epiretinal,"
+        "microelectrode array neural recording electrophysiology,"
+        "closed loop neural feedback adaptive stimulation,"
+        # ── Neurotech: sensing & biotech overlap ─────────────────────────────
+        "optogenetics neural circuit photostimulation,"
+        "EEG ECoG brain signal electrode seizure,"
+        "neurotransmitter biosensor brain chemistry,"
+        # ── Cardiac & vascular devices ────────────────────────────────────────
+        "cardiac pacemaker implantable defibrillator ICD,"
+        "coronary stent drug eluting angioplasty,"
+        "heart valve prosthetic transcatheter TAVR,"
+        "cardiac ablation electrophysiology catheter,"
+        "left ventricular assist device LVAD heart failure,"
+        # ── Implantable & diagnostic devices ─────────────────────────────────
+        "implantable biosensor continuous monitoring glucose,"
+        "wearable biosensor physiological health monitoring,"
+        "drug delivery implantable controlled release polymer,"
+        "orthopedic implant joint replacement bone fixation,"
+        "surgical robot minimally invasive laparoscopic,"
+        "intraocular lens ophthalmology cataract vitreous,"
+        "hearing aid cochlear auditory signal processing,"
+        # ── AI & digital health ───────────────────────────────────────────────
+        "machine learning medical imaging diagnosis radiology,"
+        "AI pathology cancer detection deep learning,"
+        "digital biomarker remote patient monitoring wearable,"
+        "federated learning healthcare clinical data privacy"
     )
-    backfill_from: str = "2022-01-01"
+    backfill_from: str = "2020-01-01"
 
     # ── Scheduler ────────────────────────────────────────────────────────────
     schedule_cron: str = "0 2 * * *"
