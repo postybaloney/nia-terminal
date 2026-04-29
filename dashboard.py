@@ -752,61 +752,7 @@ app.layout = html.Div(
                        "borderRadius": "2px", "padding": "16px 20px"}))], className="g-2"),
             html.Div(style={"height": "10px"}),
 
-            # Row 4: Patent browser table
-            dbc.Row([dbc.Col(html.Div([
-                html.Div([
-                    html.Span("PATENT BROWSER",
-                              style={"color": AMBER, "fontSize": "10px", "fontFamily": MONO,
-                                     "letterSpacing": "2px"}),
-                    html.Span(id="table-count",
-                              style={"color": DIM, "fontSize": "10px", "fontFamily": MONO,
-                                     "marginLeft": "12px"}),
-                ], style={"marginBottom": "12px", "paddingBottom": "8px",
-                           "borderBottom": f"1px solid {BORDER}"}),
-                dash_table.DataTable(
-                    id="patent-table",
-                    columns=[
-                        *[{"name": c, "id": c} for c in
-                          ["Date", "Source", "Patent ID", "Title", "Assignee", "Query", "CPC"]],
-                        {"name": "Link", "id": "Link", "presentation": "markdown"},
-                    ],
-                    data=[],
-                    page_size=20,
-                    filter_action="native",
-                    sort_action="native",
-                    markdown_options={"link_target": "_blank"},
-                    style_table={"overflowX": "auto"},
-                    style_cell={
-                        "background": CARD2, "color": TEXT,
-                        "border": f"1px solid {BORDER}",
-                        "fontFamily": MONO, "fontSize": "11px",
-                        "padding": "6px 10px", "textAlign": "left",
-                        "maxWidth": "220px", "overflow": "hidden",
-                        "textOverflow": "ellipsis",
-                    },
-                    style_header={
-                        "background": BG, "color": AMBER,
-                        "fontWeight": "bold", "fontSize": "9px",
-                        "letterSpacing": "1px", "border": f"1px solid {BORDER}",
-                        "textTransform": "uppercase", "fontFamily": MONO,
-                    },
-                    style_filter={
-                        "background": BG, "color": TEXT,
-                        "border": f"1px solid {BORDER}", "fontFamily": MONO,
-                    },
-                    style_data_conditional=[
-                        {"if": {"row_index": "odd"}, "backgroundColor": "#0a1020"},
-                        {"if": {"filter_query": '{Source} = "lens"'}, "color": TEAL},
-                        {"if": {"filter_query": '{Source} = "patentsview"'}, "color": BLUE},
-                        {"if": {"filter_query": '{Source} = "epo"'}, "color": GREEN},
-                    ],
-                ),
-            ], style={"background": CARD, "border": f"1px solid {BORDER}",
-                       "borderRadius": "2px", "padding": "16px 20px"}))], className="g-2"),
-
-            html.Div(style={"height": "10px"}),
-
-            # Row 5: Patent Search
+            # Row 4: Patent Search
             dbc.Row([dbc.Col(html.Div([
 
                 # ── Section header ──
@@ -886,6 +832,60 @@ app.layout = html.Div(
             ], style={"background": CARD, "border": f"1px solid {BORDER}",
                        "borderRadius": "2px", "padding": "16px 20px"}))],
                 className="g-2"),
+
+            html.Div(style={"height": "10px"}),
+
+            # Row 5: Patent browser table
+            dbc.Row([dbc.Col(html.Div([
+                html.Div([
+                    html.Span("PATENT BROWSER",
+                              style={"color": AMBER, "fontSize": "10px", "fontFamily": MONO,
+                                     "letterSpacing": "2px"}),
+                    html.Span(id="table-count",
+                              style={"color": DIM, "fontSize": "10px", "fontFamily": MONO,
+                                     "marginLeft": "12px"}),
+                ], style={"marginBottom": "12px", "paddingBottom": "8px",
+                           "borderBottom": f"1px solid {BORDER}"}),
+                dash_table.DataTable(
+                    id="patent-table",
+                    columns=[
+                        *[{"name": c, "id": c} for c in
+                          ["Date", "Source", "Patent ID", "Title", "Assignee", "Query", "CPC"]],
+                        {"name": "Link", "id": "Link", "presentation": "markdown"},
+                    ],
+                    data=[],
+                    page_size=20,
+                    filter_action="native",
+                    sort_action="native",
+                    markdown_options={"link_target": "_blank"},
+                    style_table={"overflowX": "auto"},
+                    style_cell={
+                        "background": CARD2, "color": TEXT,
+                        "border": f"1px solid {BORDER}",
+                        "fontFamily": MONO, "fontSize": "11px",
+                        "padding": "6px 10px", "textAlign": "left",
+                        "maxWidth": "220px", "overflow": "hidden",
+                        "textOverflow": "ellipsis",
+                    },
+                    style_header={
+                        "background": BG, "color": AMBER,
+                        "fontWeight": "bold", "fontSize": "9px",
+                        "letterSpacing": "1px", "border": f"1px solid {BORDER}",
+                        "textTransform": "uppercase", "fontFamily": MONO,
+                    },
+                    style_filter={
+                        "background": BG, "color": TEXT,
+                        "border": f"1px solid {BORDER}", "fontFamily": MONO,
+                    },
+                    style_data_conditional=[
+                        {"if": {"row_index": "odd"}, "backgroundColor": "#0a1020"},
+                        {"if": {"filter_query": '{Source} = "lens"'}, "color": TEAL},
+                        {"if": {"filter_query": '{Source} = "patentsview"'}, "color": BLUE},
+                        {"if": {"filter_query": '{Source} = "epo"'}, "color": GREEN},
+                    ],
+                ),
+            ], style={"background": CARD, "border": f"1px solid {BORDER}",
+                       "borderRadius": "2px", "padding": "16px 20px"}))], className="g-2"),
 
             html.Div(style={"height": "28px"}),
         ], fluid=True),
