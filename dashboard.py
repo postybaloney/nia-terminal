@@ -325,12 +325,14 @@ def _search_patents(
     query: str = "",
     cpc_filter: str = "",
     source_filter: str = "all",
+    matched_query_filter: str = "",
     limit: int = 100,
 ) -> list[dict]:
-    """Full-text ILIKE search over title + abstract, with optional CPC/source filters."""
+    """Full-text ILIKE search over title + abstract, with optional CPC/source/matched-query filters."""
     q = (query or "").strip()
     cpc = (cpc_filter or "").strip().upper()
-    if not q and not cpc:
+    mq = (matched_query_filter or "").strip()
+    if not q and not cpc and not mq:
         return []
 
     with get_session() as s:
@@ -343,13 +345,15 @@ def _search_patents(
         )
 
         filters = []
-        if q:
+        if mq:
+            # Exact matched_query lookup (from "N patents" click in analysis panel)
+            filters.append(RawPatent.matched_query == mq)
+        elif q:
             filters.append(or_(
                 RawPatent.title.ilike(f"%{q}%"),
                 RawPatent.abstract.ilike(f"%{q}%"),
             ))
         if cpc:
-            # Cast the JSONB array to text and search for the prefix
             filters.append(cast(RawPatent.cpc_codes, SAText).ilike(f'%"{cpc}%'))
         if source_filter and source_filter != "all":
             filters.append(RawPatent.source == source_filter)
@@ -601,6 +605,15 @@ def _kpi_card(label: str, value: str, sub: str = "", accent: str = AMBER) -> dbc
     )
 
 
+def _fmt_query_title(q: str) -> str:
+    """Turn a raw query string into a readable title."""
+    # Remove common filler stop-words that clutter a display title
+    stops = {"and", "or", "the", "of", "in", "for", "with", "a", "an"}
+    words = q.replace(",", " ").replace("-", " ").split()
+    kept = [w for w in words if w.lower() not in stops] or words
+    return " · ".join(w.title() for w in kept[:8])
+
+
 def _analysis_panel(analyses: list[dict]) -> html.Div:
     if not analyses:
         return html.Div(
@@ -608,35 +621,69 @@ def _analysis_panel(analyses: list[dict]) -> html.Div:
             style={"color": DIM, "fontFamily": MONO, "padding": "16px", "fontSize": "12px"},
         )
     items = []
-    for a in analyses[:4]:
+    for idx, a in enumerate(analyses[:5]):
+        title = _fmt_query_title(a["query"])
+        themes = a["themes"] or []
+
         badges = [
-            html.Span(t, style={
-                "background": "#1a2035", "color": AMBER, "fontSize": "10px",
-                "padding": "2px 8px", "borderRadius": "2px",
-                "marginRight": "4px", "marginBottom": "4px",
-                "display": "inline-block", "fontFamily": MONO,
-                "border": f"1px solid {AMBER}44",
-            })
-            for t in (a["themes"] or [])[:6]
+            html.Button(
+                t,
+                id={"type": "theme-click", "q": f"{a['query']}|||{t}"},
+                n_clicks=0,
+                className="theme-badge",
+                style={
+                    "background": "#1a2035", "color": AMBER, "fontSize": "10px",
+                    "padding": "3px 10px", "borderRadius": "3px",
+                    "marginRight": "5px", "marginBottom": "5px",
+                    "fontFamily": MONO,
+                    "border": f"1px solid {AMBER}44",
+                },
+            )
+            for t in themes  # show ALL themes
         ]
+
         items.append(html.Div([
+            # ── Header row ──
             html.Div([
-                html.Span(a["query"][:55], style={"color": AMBER, "fontSize": "11px",
-                                                   "fontFamily": MONO, "fontWeight": "bold"}),
-                html.Span(f"  ·  {a['patent_count']} patents",
-                          style={"color": DIM, "fontSize": "10px", "fontFamily": MONO}),
-                html.Span(a["created_at"],
-                          style={"color": DIM, "fontSize": "10px", "fontFamily": MONO,
-                                 "float": "right"}),
-            ], style={"marginBottom": "8px"}),
-            html.Div(badges, style={"marginBottom": "8px"}),
+                html.Div(
+                    title,
+                    style={"color": AMBER, "fontSize": "13px", "fontFamily": MONO,
+                           "fontWeight": "bold", "letterSpacing": "0.5px",
+                           "marginBottom": "2px"},
+                ),
+                html.Div(
+                    a["query"],
+                    style={"color": DIM, "fontSize": "9px", "fontFamily": MONO,
+                           "letterSpacing": "0.3px", "marginBottom": "6px"},
+                ),
+                html.Div([
+                    html.Button(
+                        f"{a['patent_count']} patents",
+                        id={"type": "query-link", "q": a["query"]},
+                        n_clicks=0,
+                        className="patents-link",
+                        style={"color": TEAL, "fontSize": "10px", "fontFamily": MONO,
+                               "marginRight": "12px"},
+                    ),
+                    html.Span(
+                        a["created_at"],
+                        style={"color": DIM, "fontSize": "10px", "fontFamily": MONO,
+                               "float": "right"},
+                    ),
+                ]),
+            ], style={"marginBottom": "10px"}),
+
+            # ── Theme badges (all of them) ──
+            html.Div(badges, style={"marginBottom": "10px", "lineHeight": "2"}),
+
+            # ── Strategic takeaway ──
             html.Div(
                 a.get("takeaway") or "—",
                 style={"color": TEXT, "fontSize": "11px", "fontFamily": MONO,
-                       "fontStyle": "italic", "lineHeight": "1.6",
+                       "fontStyle": "italic", "lineHeight": "1.7",
                        "borderLeft": f"2px solid {AMBER}55", "paddingLeft": "10px"},
             ),
-        ], style={"marginBottom": "18px", "paddingBottom": "18px",
+        ], style={"marginBottom": "20px", "paddingBottom": "20px",
                   "borderBottom": f"1px solid {BORDER}"}))
     return html.Div(items)
 
@@ -664,6 +711,7 @@ app.layout = html.Div(
     style={"background": BG, "minHeight": "100vh"},
     children=[
         dcc.Interval(id="tick", interval=5 * 60 * 1000, n_intervals=0),
+        dcc.Store(id="analysis-search-store"),
 
         # ── Header bar ────────────────────────────────────────────────────────
         html.Div(
@@ -992,36 +1040,83 @@ def refresh_ingestion(_n: int, period: str):
 
 
 @app.callback(
+    Output("analysis-search-store", "data"),
+    Input({"type": "query-link", "q": dash.ALL}, "n_clicks"),
+    Input({"type": "theme-click", "q": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_analysis_click(_qclicks, _tclicks):
+    tid = dash.ctx.triggered_id
+    if not tid:
+        return dash.no_update
+    raw = tid["q"]
+    if tid["type"] == "query-link":
+        # "N patents" click — find all patents for this matched_query
+        return {"mode": "query", "term": raw}
+    else:
+        # Theme badge click — search title+abstract for the theme text
+        # raw is "original_query|||theme_text"
+        theme = raw.split("|||", 1)[-1] if "|||" in raw else raw
+        return {"mode": "theme", "term": theme}
+
+
+@app.callback(
     Output("search-results", "children"),
     Output("search-count", "children"),
+    Output("search-input", "value"),
     Input("search-btn", "n_clicks"),
     Input("search-input", "n_submit"),
+    Input("analysis-search-store", "data"),
     dash.dependencies.State("search-input", "value"),
     dash.dependencies.State("search-cpc", "value"),
     dash.dependencies.State("search-source", "value"),
     prevent_initial_call=True,
 )
-def do_search(_clicks, _submit, query: str, cpc: str, source: str):
+def do_search(_clicks, _submit, store_data, query: str, cpc: str, source: str):
+    matched_query_filter = ""
+
+    if dash.ctx.triggered_id == "analysis-search-store" and store_data:
+        mode = store_data.get("mode", "theme")
+        term = store_data.get("term", "")
+        if mode == "query":
+            matched_query_filter = term
+            query = ""          # bypass title/abstract search
+            label_term = f"query: {term[:60]}"
+        else:
+            query = term
+            label_term = f"'{term}'"
+        cpc = ""
+        source = "all"
+    else:
+        label_term = f"'{(query or '').strip()}'" if (query or "").strip() else ""
+
     q = (query or "").strip()
     cpc = (cpc or "").strip()
-    if not q and not cpc:
-        return [], html.Span("Enter a keyword or CPC prefix to search.",
-                             style={"color": DIM, "fontFamily": MONO, "fontSize": "11px"})
+
+    if not q and not cpc and not matched_query_filter:
+        return (
+            [],
+            html.Span("Enter a keyword or CPC prefix to search.",
+                      style={"color": DIM, "fontFamily": MONO, "fontSize": "11px"}),
+            query or "",
+        )
     try:
-        results = _search_patents(q, cpc, source or "all", limit=100)
+        results = _search_patents(q, cpc, source or "all", matched_query_filter, limit=100)
     except Exception as exc:
         return (
             [html.Div(f"Search error: {exc}",
                       style={"color": RED, "fontFamily": MONO, "fontSize": "12px"})],
             "",
+            query or "",
         )
     count_label = (
         f"-- {len(results)} result{'s' if len(results) != 1 else ''}"
-        + (f" for '{q}'" if q else "")
+        + (f"  for {label_term}" if label_term else "")
         + (f"  |  CPC: {cpc.upper()}" if cpc else "")
         + ("  |  showing first 100" if len(results) == 100 else "")
     )
-    return _render_search_results(results), count_label
+    display_query = q if q else (store_data or {}).get("term", "") if store_data else ""
+    return _render_search_results(results), count_label, display_query
 
 
 if __name__ == "__main__":
