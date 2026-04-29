@@ -106,6 +106,17 @@ async def run_pipeline() -> PipelineResult:
 
     log.info("pipeline: total fetched across all sources: %d", len(all_patents))
 
+    # Quality gate — reject records that have neither a title nor an abstract.
+    # These are useless for analysis and search (typically bare USPTO metadata stubs).
+    quality_filtered = [p for p in all_patents if p.title or p.abstract]
+    dropped = len(all_patents) - len(quality_filtered)
+    if dropped:
+        log.info(
+            "pipeline: quality gate dropped %d records with no title or abstract",
+            dropped,
+        )
+    all_patents = quality_filtered
+
     # Deduplicate within batch by (source, source_id)
     seen: dict[tuple, NormalizedPatent] = {}
     for p in all_patents:
