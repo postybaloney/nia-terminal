@@ -743,10 +743,10 @@ app.layout = html.Div(
                 ]), width="auto"),
                 dbc.Col(html.Div([
                     html.Span("● LIVE  ", style={"color": GREEN, "fontSize": "10px", "fontFamily": MONO}),
-                    html.A("Research Dashboard", href="https://nia-theses.railway.up.app", style={
+                    html.A("Research Dashboard", href="https://nia-theses-production.up.railway.app", style={
                                 "color": DIM, "fontSize": "9px", "fontFamily": MONO,
                                 "textDecoration": "none", "letterSpacing": "1px",
-                            })
+                            }),
                     html.Span(id="last-updated",
                               style={"color": DIM, "fontSize": "10px", "fontFamily": MONO}),
                 ]), width="auto", className="ms-auto"),

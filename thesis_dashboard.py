@@ -808,7 +808,7 @@ def _layout() -> html.Div:
                     ),
                     html.Div(
                         [
-                            html.A("◀ Patent Dashboard", href="https://nia-patent.railway.up.app", style={
+                            html.A("◀ Patent Dashboard", href="https://nia-patent.up.railway.app", style={
                                 "color": DIM, "fontSize": "9px", "fontFamily": MONO,
                                 "textDecoration": "none", "letterSpacing": "1px",
                             }),
