@@ -142,7 +142,8 @@ class Settings(BaseSettings):
     backfill_from: str = "2020-01-01"
 
     # ── Scheduler ────────────────────────────────────────────────────────────
-    schedule_cron: str = "0 2 * * *"
+    schedule_cron: str = "0 2 * * *"          # patent ingest — default: 02:00 UTC daily
+    thesis_schedule_cron: str = "0 3 * * 0"   # thesis ingest — default: 03:00 UTC Sundays
 
     # ── Limits ────────────────────────────────────────────────────────────────
     per_page: int = 50

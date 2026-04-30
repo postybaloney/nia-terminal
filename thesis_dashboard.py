@@ -552,6 +552,31 @@ def _link_pill(label: str, href: str, color: str = DIM) -> html.A:
     )
 
 
+_PAGE_SIZE = 10
+
+
+def _btn_style(disabled: bool) -> dict:
+    return {
+        "background": "none",
+        "border": f"1px solid {BORDER if disabled else AMBER}",
+        "color": DIM if disabled else AMBER,
+        "fontFamily": MONO, "fontSize": "9px",
+        "padding": "3px 12px",
+        "cursor": "default" if disabled else "pointer",
+        "borderRadius": "2px", "letterSpacing": "1px",
+        "opacity": "0.4" if disabled else "1",
+    }
+
+
+def _pagination_props(page: int, total: int):
+    """Return (label_text, prev_disabled, next_disabled)."""
+    total_pages = max(1, -(-total // _PAGE_SIZE))
+    start = page * _PAGE_SIZE + 1
+    end = min((page + 1) * _PAGE_SIZE, total)
+    label = f"  {start}–{end} of {total}  ·  page {page + 1}/{total_pages}  "
+    return label, page == 0, page >= total_pages - 1
+
+
 def _render_search_results(rows: list[dict]) -> list:
     if not rows:
         return [html.Div("No results.", style={"color": DIM, "fontFamily": MONO, "fontSize": "11px", "padding": "10px 0"})]
@@ -761,6 +786,8 @@ def _layout() -> html.Div:
         children=[
             dcc.Interval(id="thesis-refresh", interval=5 * 60 * 1000, n_intervals=0),
             dcc.Store(id="thesis-search-store"),
+            dcc.Store(id="thesis-results-store", data=[]),
+            dcc.Store(id="thesis-search-page", data=0),
 
             # ── Header ─────────────────────────────────────────────────────
             html.Div(
@@ -781,7 +808,7 @@ def _layout() -> html.Div:
                     ),
                     html.Div(
                         [
-                            html.A("◀ Patent Dashboard", href="http://localhost:8050", style={
+                            html.A("◀ Patent Dashboard", href="https://nia-patent.railway.up.app", style={
                                 "color": DIM, "fontSize": "9px", "fontFamily": MONO,
                                 "textDecoration": "none", "letterSpacing": "1px",
                             }),
@@ -991,6 +1018,40 @@ def _layout() -> html.Div:
                         style={"marginBottom": "14px"},
                     ),
                     html.Div(id="thesis-search-results"),
+                    html.Div(
+                        [
+                            html.Button(
+                                "← PREV", id="thesis-prev-btn", n_clicks=0,
+                                style={
+                                    "background": "none", "border": f"1px solid {BORDER}",
+                                    "color": DIM, "fontFamily": MONO,
+                                    "fontSize": "9px", "padding": "3px 12px",
+                                    "cursor": "default", "borderRadius": "2px",
+                                    "letterSpacing": "1px", "opacity": "0.4",
+                                },
+                            ),
+                            html.Span(
+                                id="thesis-page-label",
+                                style={"color": DIM, "fontSize": "9px",
+                                       "fontFamily": MONO, "padding": "0 10px",
+                                       "verticalAlign": "middle"},
+                            ),
+                            html.Button(
+                                "NEXT →", id="thesis-next-btn", n_clicks=0,
+                                style={
+                                    "background": "none", "border": f"1px solid {BORDER}",
+                                    "color": DIM, "fontFamily": MONO,
+                                    "fontSize": "9px", "padding": "3px 12px",
+                                    "cursor": "default", "borderRadius": "2px",
+                                    "letterSpacing": "1px", "opacity": "0.4",
+                                },
+                            ),
+                        ],
+                        id="thesis-search-pagination",
+                        style={"display": "none", "marginTop": "12px",
+                               "paddingTop": "10px", "borderTop": f"1px solid {BORDER}",
+                               "textAlign": "center"},
+                    ),
                 ],
                 style={
                     "background": CARD, "border": f"1px solid {BORDER}",
@@ -1096,7 +1157,8 @@ def populate_search_from_cluster(store_data):
 
 
 @app.callback(
-    Output("thesis-search-results", "children"),
+    Output("thesis-results-store", "data"),
+    Output("thesis-search-page", "data"),
     Input("thesis-search-btn", "n_clicks"),
     Input("thesis-search-store", "data"),
     State("thesis-search-input", "value"),
@@ -1107,7 +1169,6 @@ def populate_search_from_cluster(store_data):
     prevent_initial_call=True,
 )
 def do_search(_btn, store_data, query, year_from, year_to, relevance, source_filter):
-    # If triggered by a cluster click, use the cluster term
     if dash.ctx.triggered_id == "thesis-search-store" and store_data:
         query = store_data.get("term", query or "")
 
@@ -1117,12 +1178,69 @@ def do_search(_btn, store_data, query, year_from, year_to, relevance, source_fil
         year_to=year_to,
         relevance=relevance or "all",
         source_filter=source_filter or "all",
+        limit=500,
     )
+    return rows, 0
+
+
+@app.callback(
+    Output("thesis-search-results", "children"),
+    Output("thesis-page-label", "children"),
+    Output("thesis-prev-btn", "disabled"),
+    Output("thesis-prev-btn", "style"),
+    Output("thesis-next-btn", "disabled"),
+    Output("thesis-next-btn", "style"),
+    Output("thesis-search-pagination", "style"),
+    Output("thesis-search-page", "data", allow_duplicate=True),
+    Input("thesis-results-store", "data"),
+    Input("thesis-prev-btn", "n_clicks"),
+    Input("thesis-next-btn", "n_clicks"),
+    State("thesis-search-page", "data"),
+    prevent_initial_call=True,
+)
+def render_thesis_page(results, _prev, _next, current_page):
+    triggered = dash.ctx.triggered_id
+    results = results or []
+    total = len(results)
+    page = current_page or 0
+
+    if triggered == "thesis-results-store":
+        page = 0
+    elif triggered == "thesis-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "thesis-next-btn":
+        total_pages = max(1, -(-total // _PAGE_SIZE))
+        page = min(page + 1, total_pages - 1)
+
+    _hidden = {"display": "none", "marginTop": "12px", "paddingTop": "10px",
+               "borderTop": f"1px solid {BORDER}", "textAlign": "center"}
+    _visible = {**_hidden, "display": "block"}
+
+    if not results:
+        return (
+            [html.Div("No results.", style={"color": DIM, "fontFamily": MONO,
+                                            "fontSize": "11px", "padding": "10px 0"})],
+            "", True, _btn_style(True), True, _btn_style(True), _hidden, page,
+        )
+
+    start = page * _PAGE_SIZE
+    end = start + _PAGE_SIZE
+    page_results = results[start:end]
+
     header = html.Div(
-        f"{len(rows)} result{'s' if len(rows) != 1 else ''}" + (" (capped at 100)" if len(rows) == 100 else ""),
+        f"{total} result{'s' if total != 1 else ''}",
         style={"color": DIM, "fontSize": "9px", "fontFamily": MONO, "marginBottom": "6px"},
     )
-    return [header] + _render_search_results(rows)
+    label, prev_dis, next_dis = _pagination_props(page, total)
+
+    return (
+        [header] + _render_search_results(page_results),
+        label,
+        prev_dis, _btn_style(prev_dis),
+        next_dis, _btn_style(next_dis),
+        _visible,
+        page,
+    )
 
 
 @app.callback(

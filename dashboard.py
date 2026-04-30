@@ -726,6 +726,8 @@ app.layout = html.Div(
     children=[
         dcc.Interval(id="tick", interval=5 * 60 * 1000, n_intervals=0),
         dcc.Store(id="analysis-search-store"),
+        dcc.Store(id="search-results-store", data=[]),
+        dcc.Store(id="search-page", data=0),
 
         # ── Header bar ────────────────────────────────────────────────────────
         html.Div(
@@ -741,6 +743,10 @@ app.layout = html.Div(
                 ]), width="auto"),
                 dbc.Col(html.Div([
                     html.Span("● LIVE  ", style={"color": GREEN, "fontSize": "10px", "fontFamily": MONO}),
+                    html.A("Research Dashboard", href="https://nia-theses.railway.up.app", style={
+                                "color": DIM, "fontSize": "9px", "fontFamily": MONO,
+                                "textDecoration": "none", "letterSpacing": "1px",
+                            })
                     html.Span(id="last-updated",
                               style={"color": DIM, "fontSize": "10px", "fontFamily": MONO}),
                 ]), width="auto", className="ms-auto"),
@@ -890,6 +896,41 @@ app.layout = html.Div(
 
                 # ── Results ──
                 html.Div(id="search-results"),
+
+                # ── Pagination bar ──
+                html.Div(
+                    [
+                        html.Button(
+                            "← PREV", id="search-prev-btn", n_clicks=0,
+                            style={
+                                "background": "none", "border": f"1px solid #1f2937",
+                                "color": "#6b7280", "fontFamily": "'Courier New', monospace",
+                                "fontSize": "9px", "padding": "3px 12px",
+                                "cursor": "default", "borderRadius": "2px",
+                                "letterSpacing": "1px", "opacity": "0.4",
+                            },
+                        ),
+                        html.Span(
+                            id="search-page-label",
+                            style={"color": "#6b7280", "fontSize": "9px",
+                                   "fontFamily": "'Courier New', monospace",
+                                   "padding": "0 10px", "verticalAlign": "middle"},
+                        ),
+                        html.Button(
+                            "NEXT →", id="search-next-btn", n_clicks=0,
+                            style={
+                                "background": "none", "border": f"1px solid #1f2937",
+                                "color": "#6b7280", "fontFamily": "'Courier New', monospace",
+                                "fontSize": "9px", "padding": "3px 12px",
+                                "cursor": "default", "borderRadius": "2px",
+                                "letterSpacing": "1px", "opacity": "0.4",
+                            },
+                        ),
+                    ],
+                    id="search-pagination",
+                    style={"display": "none", "marginTop": "12px", "paddingTop": "10px",
+                           "borderTop": "1px solid #1f2937", "textAlign": "center"},
+                ),
 
             ], style={"background": CARD, "border": f"1px solid {BORDER}",
                        "borderRadius": "2px", "padding": "16px 20px"}))],
@@ -1074,8 +1115,34 @@ def handle_analysis_click(_qclicks, _tclicks):
         return {"mode": "theme", "term": theme}
 
 
+_PAGE_SIZE = 10
+
+
+def _btn_style(disabled: bool) -> dict:
+    return {
+        "background": "none",
+        "border": f"1px solid {BORDER if disabled else AMBER}",
+        "color": DIM if disabled else AMBER,
+        "fontFamily": MONO, "fontSize": "9px",
+        "padding": "3px 12px",
+        "cursor": "default" if disabled else "pointer",
+        "borderRadius": "2px", "letterSpacing": "1px",
+        "opacity": "0.4" if disabled else "1",
+    }
+
+
+def _pagination_props(page: int, total: int):
+    """Return (label_text, prev_disabled, next_disabled, container_display)."""
+    total_pages = max(1, -(-total // _PAGE_SIZE))
+    start = page * _PAGE_SIZE + 1
+    end   = min((page + 1) * _PAGE_SIZE, total)
+    label = f"  {start}–{end} of {total}  ·  page {page + 1}/{total_pages}  "
+    return label, page == 0, page >= total_pages - 1, "block"
+
+
 @app.callback(
-    Output("search-results", "children"),
+    Output("search-results-store", "data"),
+    Output("search-page", "data"),
     Output("search-count", "children"),
     Output("search-input", "value"),
     Input("search-btn", "n_clicks"),
@@ -1094,7 +1161,7 @@ def do_search(_clicks, _submit, store_data, query: str, cpc: str, source: str):
         term = store_data.get("term", "")
         if mode == "query":
             matched_query_filter = term
-            query = ""          # bypass title/abstract search
+            query = ""
             label_term = f"query: {term[:60]}"
         else:
             query = term
@@ -1110,27 +1177,79 @@ def do_search(_clicks, _submit, store_data, query: str, cpc: str, source: str):
     if not q and not cpc and not matched_query_filter:
         return (
             [],
+            0,
             html.Span("Enter a keyword or CPC prefix to search.",
                       style={"color": DIM, "fontFamily": MONO, "fontSize": "11px"}),
             query or "",
         )
     try:
-        results = _search_patents(q, cpc, source or "all", matched_query_filter, limit=100)
+        results = _search_patents(q, cpc, source or "all", matched_query_filter, limit=500)
     except Exception as exc:
         return (
-            [html.Div(f"Search error: {exc}",
-                      style={"color": RED, "fontFamily": MONO, "fontSize": "12px"})],
-            "",
+            [],
+            0,
+            html.Span(f"Search error: {exc}",
+                      style={"color": RED, "fontFamily": MONO, "fontSize": "12px"}),
             query or "",
         )
     count_label = (
         f"-- {len(results)} result{'s' if len(results) != 1 else ''}"
         + (f"  for {label_term}" if label_term else "")
         + (f"  |  CPC: {cpc.upper()}" if cpc else "")
-        + ("  |  showing first 100" if len(results) == 100 else "")
     )
     display_query = q if q else (store_data or {}).get("term", "") if store_data else ""
-    return _render_search_results(results), count_label, display_query
+    return results, 0, count_label, display_query
+
+
+@app.callback(
+    Output("search-results", "children"),
+    Output("search-page-label", "children"),
+    Output("search-prev-btn", "disabled"),
+    Output("search-prev-btn", "style"),
+    Output("search-next-btn", "disabled"),
+    Output("search-next-btn", "style"),
+    Output("search-pagination", "style"),
+    Output("search-page", "data", allow_duplicate=True),
+    Input("search-results-store", "data"),
+    Input("search-prev-btn", "n_clicks"),
+    Input("search-next-btn", "n_clicks"),
+    dash.dependencies.State("search-page", "data"),
+    prevent_initial_call=True,
+)
+def render_search_page(results, _prev, _next, current_page):
+    triggered = dash.ctx.triggered_id
+    results = results or []
+    total = len(results)
+    page = current_page or 0
+
+    if triggered == "search-results-store":
+        page = 0
+    elif triggered == "search-prev-btn":
+        page = max(0, page - 1)
+    elif triggered == "search-next-btn":
+        total_pages = max(1, -(-total // _PAGE_SIZE))
+        page = min(page + 1, total_pages - 1)
+
+    _hidden = {"display": "none", "marginTop": "12px", "paddingTop": "10px",
+               "borderTop": f"1px solid {BORDER}", "textAlign": "center"}
+    _visible = {**_hidden, "display": "block"}
+
+    if not results:
+        return [], "", True, _btn_style(True), True, _btn_style(True), _hidden, page
+
+    start = page * _PAGE_SIZE
+    end = start + _PAGE_SIZE
+    page_results = results[start:end]
+    label, prev_dis, next_dis, _ = _pagination_props(page, total)
+
+    return (
+        _render_search_results(page_results),
+        label,
+        prev_dis, _btn_style(prev_dis),
+        next_dis, _btn_style(next_dis),
+        _visible,
+        page,
+    )
 
 
 if __name__ == "__main__":
