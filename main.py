@@ -431,7 +431,23 @@ def main() -> None:
     elif args.command == "run-signals":
         asyncio.run(cmd_run_signals())
     elif args.command == "run-all":
-        asyncio.run(asyncio.gather(cmd_run(None), cmd_run_theses(), cmd_run_signals()))
+        async def _run_all() -> None:
+            stages = (
+                ("patents", cmd_run, (None,)),
+                ("theses", cmd_run_theses, ()),
+                ("signals", cmd_run_signals, ()),
+            )
+            failed = []
+            for name, fn, fn_args in stages:
+                try:
+                    await fn(*fn_args)
+                except Exception as exc:  # isolate each stage; a nightly job wants partial success
+                    failed.append(name)
+                    console.print(f"[red]run-all: {name} stage failed:[/red] {exc!r}")
+            if failed:
+                console.print(f"[red]run-all finished with failures: {', '.join(failed)}[/red]")
+                sys.exit(1)
+        asyncio.run(_run_all())
     elif args.command == "digest":
         asyncio.run(cmd_digest(send=getattr(args, "send", False)))
     elif args.command == "digest-theses":
