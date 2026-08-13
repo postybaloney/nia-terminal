@@ -1,0 +1,55 @@
+name: NIA nightly ingest
+
+# Replaces the always-on Railway scheduler with a free scheduled job.
+# The pipeline is a daily batch, so a cron workflow is the right shape:
+# no idle server, free minutes, built-in logs + retries.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"      # 07:00 UTC daily = 00:00 America/Los_Angeles
+  workflow_dispatch: {}       # lets you run it manually from the Actions tab first
+
+concurrency:
+  group: nia-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # --- set these in GitHub → repo Settings → Secrets and variables → Actions ---
+      DATABASE_URL:      ${{ secrets.DATABASE_URL }}       # Neon connection string (postgresql://...sslmode=require)
+      LLM_BACKEND:       ${{ secrets.LLM_BACKEND }}        # e.g. groq
+      GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+      OPENFDA_API_KEY:   ${{ secrets.OPENFDA_API_KEY }}    # optional
+      EPO_CLIENT_ID:     ${{ secrets.EPO_CLIENT_ID }}      # optional
+      EPO_CLIENT_SECRET: ${{ secrets.EPO_CLIENT_SECRET }}  # optional
+      RESEND_API_KEY:    ${{ secrets.RESEND_API_KEY }}     # optional (digest email)
+      RESEND_FROM:       ${{ secrets.RESEND_FROM }}        # optional
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}  # optional (digest to Slack)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ensure schema (idempotent)
+        run: python main.py init
+
+      - name: Run full pipeline (patents + theses + signals)
+        run: python main.py run-all
+
+      - name: Generate + send current-signal digest
+        # Drop "--send" (and the notify secrets) if you only want it in the log for now.
+        run: python main.py digest-signals --send
+
+      - name: Weekly patent digest (Mondays only)
+        if: ${{ github.event.schedule == '0 7 * * *' }}
+        run: |
+          if [ "$(date -u +%u)" = "1" ]; then python main.py digest --send; fi

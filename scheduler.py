@@ -24,6 +24,8 @@ from db import init_db
 from db.models import AnalysisResult
 from notifiers import dispatch_digest
 from pipeline import run_pipeline
+from signal_analysis import generate_signal_digest
+from signal_pipeline import run_signal_pipeline
 from thesis_analysis import analyze_thesis_batch, generate_thesis_digest
 from thesis_pipeline import run_thesis_pipeline
 
@@ -73,7 +75,7 @@ async def _send_weekly_digest() -> None:
 
     digest = await generate_weekly_digest(
         new_count=total_new,
-        sources=["patentsview", "epo", "lens", "bigquery"],
+        sources=["epo", "bigquery"],
         queries=settings.query_list,
         latest_analysis=latest,
     )
@@ -165,7 +167,7 @@ async def _run_full_pipeline() -> None:
 
         digest = await generate_weekly_digest(
             new_count=result.new_patents,
-            sources=["patentsview", "epo", "lens", "bigquery"],
+            sources=["epo", "bigquery"],
             queries=settings.query_list,
             latest_analysis=latest_analysis,
         )
@@ -175,6 +177,27 @@ async def _run_full_pipeline() -> None:
             new_count=result.new_patents,
             run_id=result.ingest_run_id,
         )
+
+
+async def _run_signal_pipeline_job() -> None:
+    log.info("scheduler: signal pipeline starting")
+    result = await run_signal_pipeline()
+    log.info(
+        "scheduler: signal pipeline complete",
+        new=result.new_signals,
+        updated=result.updated_signals,
+        errors=len(result.errors),
+    )
+    for err in result.errors:
+        log.error("scheduler: signal ingestion error", error=err)
+
+
+async def _send_weekly_signal_digest() -> None:
+    """Send the weekly current-signal digest email/Slack."""
+    log.info("scheduler: generating weekly signal digest")
+    digest = await generate_signal_digest(days=7)
+    await dispatch_digest(digest_text=digest, new_count=0, run_id=0)
+    log.info("scheduler: weekly signal digest dispatched")
 
 
 def _sync_wrapper() -> None:
@@ -228,12 +251,32 @@ def main() -> None:
         misfire_grace_time=3600,
     )
 
+    # ── Current-signal jobs (grants, trials, FDA actions) ────────────────────
+    scheduler.add_job(
+        lambda: asyncio.run(_run_signal_pipeline_job()),
+        trigger=CronTrigger(**_parse_cron(settings.signal_schedule_cron)),
+        id="signal_pipeline",
+        name="Current-signal ingestion (NIH / ClinicalTrials / FDA)",
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        lambda: asyncio.run(_send_weekly_signal_digest()),
+        trigger=CronTrigger(day_of_week="mon", hour=8, minute=30),
+        id="weekly_signal_digest",
+        name="Weekly current-signal digest email/Slack",
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
     log.info(
         "scheduler: jobs registered — "
         "patents=%s  patent_digest=Mon 08:00 UTC  "
-        "theses=%s  thesis_digest=Mon 09:00 UTC",
+        "theses=%s  thesis_digest=Mon 09:00 UTC  "
+        "signals=%s  signal_digest=Mon 08:30 UTC",
         settings.schedule_cron,
         settings.thesis_schedule_cron,
+        settings.signal_schedule_cron,
     )
 
     try:

@@ -1,9 +1,20 @@
 # patent_intel
 
-Production patent intelligence pipeline for medtech and neurotech.
-Pulls from PatentsView (USPTO), EPO OPS, Lens.org, and Google BigQuery.
-Deduplicates by patent family, stores to PostgreSQL, and runs Claude AI
-landscape analysis on each batch.
+Production medtech/neurotech intelligence pipeline: patents + PhD theses +
+current signals (NIH grants, clinical trials, FDA device actions).
+
+Patents: EPO OPS + Google BigQuery, deduplicated by patent family.
+Signals: NIH RePORTER, ClinicalTrials.gov v2, openFDA 510(k)/PMA.
+Everything lands in PostgreSQL; an LLM layer writes landscape analysis
+and digests on each batch.
+
+> **Licensing note (2026-08):** Lens.org was removed from the active
+> pipeline — its free API tier is licensed for noncommercial use only.
+> `ingestors/lens.py` and the Lens-backed `ingestors/patentsview.py`
+> are retained but unregistered; re-add them in `pipeline.py` only under
+> a signed [Lens Commercial Use Agreement](https://about.lens.org/individual-commercial-use/).
+> All active sources (EPO OPS, BigQuery public data, NIH, ClinicalTrials.gov,
+> openFDA, OpenAlex) are free for commercial use.
 
 ---
 
@@ -109,12 +120,38 @@ python main.py scheduler
 ## CLI Reference
 
 ```bash
-python main.py init                        # create DB tables
-python main.py run                         # single pipeline run
-python main.py run --source patentsview    # one source only
+python main.py init                        # create DB tables (patents + theses + signals)
+python main.py run                         # patent pipeline run
 python main.py backfill --from 2022-01-01  # historical backfill
-python main.py digest                      # generate weekly digest
+python main.py run-theses                  # thesis pipeline run
+python main.py run-signals                 # current-signal run (NIH / trials / FDA)
+python main.py run-all                     # everything
+python main.py digest                      # weekly patent digest
+python main.py digest-signals --send       # current-signal digest → email/Slack
 python main.py scheduler                   # start cron (blocking)
+```
+
+## Current signals (v2 addition)
+
+The `signals` table holds the fast-moving layer patents can't see:
+
+| Source | Type | API | Auth |
+|---|---|---|---|
+| NIH RePORTER | grant | api.reporter.nih.gov/v2 | none |
+| ClinicalTrials.gov | trial | clinicaltrials.gov/api/v2 | none |
+| openFDA 510(k) | clearance | api.fda.gov/device/510k | optional key |
+| openFDA PMA | approval | api.fda.gov/device/pma | optional key |
+
+Configure via `SIGNAL_QUERIES` (short phrases), `SIGNAL_SINCE`, and
+`SIGNAL_SCHEDULE_CRON`. The weekly digest (`digest-signals`) is a
+deterministic scorecard — counts, dollars, cross-signal movers — with an
+optional LLM narrative on top; numbers never come from the LLM.
+
+Smoke test after setup:
+
+```bash
+python main.py run-signals   # should ingest without any API keys configured
+python main.py digest-signals
 ```
 
 ---

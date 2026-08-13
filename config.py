@@ -44,8 +44,13 @@ class Settings(BaseSettings):
     epo_client_id: str = ""
     epo_client_secret: str = ""
 
-    # Lens.org — free tier at https://lens.org/lens/user/subscriptions
+    # Lens.org — REMOVED from the active pipeline 2026-08: the free API tier is
+    # noncommercial-only. Field retained so old .env files still parse. Re-enable
+    # only under a signed Lens Commercial Use Agreement.
     lens_api_key: str = ""
+
+    # openFDA — optional API key lifts rate limits (free at open.fda.gov/apis/authentication)
+    openfda_api_key: str = ""
 
     # Google BigQuery (optional)
     bigquery_project_id: str = ""
@@ -100,6 +105,26 @@ class Settings(BaseSettings):
 
     # Optional extra keywords for hardware/software relevance filter (comma-separated)
     thesis_extra_keywords: str = ""
+
+    # ── Current signals (grants, trials, FDA actions) ─────────────────────────
+    # Compact search terms — these APIs want short phrases, not the long
+    # patent-style query strings below.
+    signal_queries: str = (
+        "neurostimulation,"
+        "brain-computer interface,"
+        "deep brain stimulation,"
+        "neuromodulation,"
+        "vagus nerve stimulation,"
+        "transcranial magnetic stimulation,"
+        "EEG monitoring,"
+        "neuroprosthesis,"
+        "cochlear implant,"
+        "intracortical electrode,"
+        "seizure detection,"
+        "sleep wearable"
+    )
+    signal_since: str = "2025-01-01"
+    signal_schedule_cron: str = "0 4 * * *"   # signal ingest — default: 04:00 UTC daily
 
     # ── Search ────────────────────────────────────────────────────────────────
     search_queries: str = (
@@ -169,6 +194,10 @@ class Settings(BaseSettings):
     @property
     def thesis_query_list(self) -> list[str]:
         return [q.strip() for q in self.thesis_queries.split(",") if q.strip()]
+
+    @property
+    def signal_query_list(self) -> list[str]:
+        return [q.strip() for q in self.signal_queries.split(",") if q.strip()]
 
     @property
     def thesis_extra_keywords_list(self) -> list[str]:

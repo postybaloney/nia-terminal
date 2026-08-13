@@ -26,8 +26,12 @@ from db.models import IngestRun, PatentFamily, RawPatent
 from ingestors.base import NormalizedPatent
 from ingestors.bigquery_ingestor import BigQueryIngestor
 from ingestors.epo import EPOIngestor
-from ingestors.lens import LensIngestor
-from ingestors.patentsview import PatentsViewIngestor
+
+# Lens.org removed 2026-08: its free API is licensed for NONCOMMERCIAL use only.
+# LensIngestor and the Lens-backed PatentsViewIngestor are unregistered but the
+# files are retained — re-add here only under a signed Lens Commercial Use
+# Agreement (https://about.lens.org/individual-commercial-use/).
+# US coverage now comes from EPO OPS (worldwide DOCDB) + BigQuery Google Patents.
 
 log = logging.getLogger(__name__)
 
@@ -72,9 +76,7 @@ async def run_pipeline() -> PipelineResult:
     per_page = settings.per_page
 
     ingestors = [
-        PatentsViewIngestor(queries, since, per_page),
         EPOIngestor(queries, since, per_page),
-        LensIngestor(queries, since, per_page),
         BigQueryIngestor(queries, since, per_page),
     ]
 
@@ -108,7 +110,7 @@ async def run_pipeline() -> PipelineResult:
 
     # Quality gate — require an abstract.
     # Records without an abstract are useless for AI analysis and search.
-    # (ODP/USPTO records have titles but no abstracts — Lens covers them better.)
+    # (ODP/USPTO records have titles but no abstracts — EPO/BigQuery cover them.)
     quality_filtered = [p for p in all_patents if p.abstract and p.abstract.strip()]
     dropped = len(all_patents) - len(quality_filtered)
     if dropped:

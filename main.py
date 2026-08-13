@@ -7,10 +7,12 @@ Usage:
   python main.py run --source patentsview   # single source
   python main.py backfill --from 2020-01-01 # re-index from a date
   python main.py run-theses        # thesis ingestion run
-  python main.py run-all           # patents + theses together
+  python main.py run-signals       # current-signal run (NIH grants / trials / FDA)
+  python main.py run-all           # patents + theses + signals together
   python main.py digest            # generate and print patent weekly digest
   python main.py digest --send     # generate + send via email/Slack
   python main.py digest-theses     # thesis research digest
+  python main.py digest-signals    # current-signal digest (add --send to dispatch)
   python main.py scheduler         # start the cron scheduler (blocking)
 """
 from __future__ import annotations
@@ -200,6 +202,44 @@ async def cmd_run_theses() -> None:
             console.print(f"  [green]✓[/green] Thesis themes: {analysis.themes}")
 
 
+async def cmd_run_signals() -> None:
+    from signal_pipeline import run_signal_pipeline
+
+    console.print("[bold]Running current-signal pipeline (NIH / ClinicalTrials / FDA)...[/bold]")
+    result = await run_signal_pipeline()
+
+    table = Table(title="Signal Pipeline Result")
+    table.add_column("Metric", style="dim")
+    table.add_column("Value", style="bold")
+    table.add_row("New signals", str(result.new_signals))
+    table.add_row("Updated", str(result.updated_signals))
+    table.add_row("Total fetched", str(result.total_fetched))
+    by_type: dict[str, int] = {}
+    for s in result.new_records:
+        by_type[s.signal_type] = by_type.get(s.signal_type, 0) + 1
+    for stype, count in sorted(by_type.items()):
+        table.add_row(f"  new {stype}s", str(count))
+    table.add_row("Errors", str(len(result.errors)))
+    console.print(table)
+
+    for err in result.errors:
+        console.print(f"[red]  Error: {err}[/red]")
+
+
+async def cmd_digest_signals(send: bool = False) -> None:
+    from notifiers import dispatch_digest
+    from signal_analysis import generate_signal_digest
+
+    digest = await generate_signal_digest(days=7)
+    console.print("\n[bold]--- CURRENT-SIGNAL INTELLIGENCE DIGEST ---[/bold]\n")
+    console.print(digest)
+
+    if send:
+        console.print("\n[bold]Dispatching digest via email/Slack...[/bold]")
+        await dispatch_digest(digest_text=digest, new_count=0, run_id=0)
+        console.print("[green]✓ Dispatch complete[/green]")
+
+
 async def cmd_digest_theses() -> None:
     from db import get_session
     from db.models import AnalysisResult
@@ -340,9 +380,10 @@ async def cmd_backfill_orcid(dry_run: bool = False) -> None:
 
 def cmd_init() -> None:
     from db import init_db
+    from db.signal_models import Signal  # noqa: F401 — registers Signal on Base.metadata
     from db.thesis_models import Thesis  # noqa: F401 — registers Thesis on Base.metadata
     init_db()
-    console.print("[green]✓ Database tables created (patents + theses)[/green]")
+    console.print("[green]✓ Database tables created (patents + theses + signals)[/green]")
 
 
 def cmd_scheduler() -> None:
@@ -357,7 +398,7 @@ def main() -> None:
     sub.add_parser("init", help="Initialize database tables")
 
     run_p = sub.add_parser("run", help="Run ingestion pipeline once")
-    run_p.add_argument("--source", help="Limit to one source (patentsview|epo|lens|bigquery)")
+    run_p.add_argument("--source", help="Limit to one source (epo|bigquery)")
 
     bf_p = sub.add_parser("backfill", help="Re-ingest from a historical date")
     bf_p.add_argument("--from", dest="since", required=True, help="Start date YYYY-MM-DD")
@@ -366,8 +407,11 @@ def main() -> None:
     digest_p = sub.add_parser("digest", help="Generate patent weekly digest")
     digest_p.add_argument("--send", action="store_true", help="Send via email/Slack after printing")
     sub.add_parser("run-theses", help="Run thesis ingestion pipeline")
-    sub.add_parser("run-all", help="Run patents + theses together")
+    sub.add_parser("run-signals", help="Run current-signal pipeline (NIH grants / trials / FDA)")
+    sub.add_parser("run-all", help="Run patents + theses + signals together")
     sub.add_parser("digest-theses", help="Generate thesis research digest")
+    dsig_p = sub.add_parser("digest-signals", help="Generate current-signal digest")
+    dsig_p.add_argument("--send", action="store_true", help="Send via email/Slack after printing")
     orcid_p = sub.add_parser("backfill-orcid", help="Backfill ORCID/OpenAlex author URLs for existing theses")
     orcid_p.add_argument("--dry-run", action="store_true", help="Preview without writing to DB")
     sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
@@ -384,12 +428,16 @@ def main() -> None:
         asyncio.run(cmd_backfill(args.since))
     elif args.command == "run-theses":
         asyncio.run(cmd_run_theses())
+    elif args.command == "run-signals":
+        asyncio.run(cmd_run_signals())
     elif args.command == "run-all":
-        asyncio.run(asyncio.gather(cmd_run(None), cmd_run_theses()))
+        asyncio.run(asyncio.gather(cmd_run(None), cmd_run_theses(), cmd_run_signals()))
     elif args.command == "digest":
         asyncio.run(cmd_digest(send=getattr(args, "send", False)))
     elif args.command == "digest-theses":
         asyncio.run(cmd_digest_theses())
+    elif args.command == "digest-signals":
+        asyncio.run(cmd_digest_signals(send=getattr(args, "send", False)))
     elif args.command == "backfill-orcid":
         asyncio.run(cmd_backfill_orcid(dry_run=getattr(args, "dry_run", False)))
     elif args.command == "scheduler":
