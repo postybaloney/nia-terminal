@@ -3,11 +3,19 @@ name: NIA nightly ingest
 # Replaces the always-on Railway scheduler with a free scheduled job.
 # The pipeline is a daily batch, so a cron workflow is the right shape:
 # no idle server, free minutes, built-in logs + retries.
+# After ingest it builds a STATIC snapshot (site/index.html) and publishes it
+# to GitHub Pages — so there's no live dashboard server to run.
 
 on:
   schedule:
     - cron: "0 7 * * *"      # 07:00 UTC daily = 00:00 America/Los_Angeles
-  workflow_dispatch: {}       # lets you run it manually from the Actions tab first
+  workflow_dispatch: {}       # lets you run it manually from the Actions tab
+
+# GitHub Pages deploy needs pages:write + id-token:write; checkout needs contents:read.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: nia-ingest
@@ -53,3 +61,45 @@ jobs:
         if: ${{ github.event.schedule == '0 7 * * *' }}
         run: |
           if [ "$(date -u +%u)" = "1" ]; then python main.py digest --send; fi
+
+      # ── Static snapshot ──────────────────────────────────────────────────
+      # Built with if:always() so a flaky-API night still publishes a fresh
+      # snapshot from whatever data made it into the DB.
+      - name: Build static snapshot
+        if: always()
+        run: python build_snapshot.py --out site/index.html
+
+      - name: Upload Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: ingest
+    if: always()            # publish the snapshot even on a partial-ingest night
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LATER — move to Cloudflare Pages once you have a custom domain:
+#   1. Add repo secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+#   2. Delete the `deploy` job above and the `pages`/`id-token` permission lines.
+#   3. Replace the "Upload Pages artifact" step with:
+#
+#        - name: Deploy to Cloudflare Pages
+#          if: always()
+#          uses: cloudflare/wrangler-action@v3
+#          with:
+#            apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#            accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+#            command: pages deploy site --project-name=nia-terminal
+#
+#   Then point terminal.neurotechintelligenceagency.com at the Pages project.
+# ─────────────────────────────────────────────────────────────────────────────
