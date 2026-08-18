@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -175,6 +175,36 @@ class Settings(BaseSettings):
     analysis_min_new: int = 5
 
     # ── Validators ────────────────────────────────────────────────────────────
+    @model_validator(mode="before")
+    @classmethod
+    def _treat_empty_env_as_unset(cls, values):
+        """
+        Drop environment variables that arrived as empty strings, so the field
+        default applies instead of being parsed.
+
+        This exists because of how GitHub Actions handles secrets: referencing
+        a secret that has NOT been set yields an empty string rather than
+        omitting the variable. So a workflow line like
+
+            SMTP_PORT: ${{ secrets.SMTP_PORT }}
+
+        sets SMTP_PORT="" when the secret is absent, and pydantic then fails
+        with "Input should be a valid integer, unable to parse string as an
+        integer" — killing the run at `main.py init`, before any ingestion.
+
+        Every non-string setting is exposed to this (smtp_port, per_page,
+        analysis_min_new, thesis_since_year), so the guard is applied class-wide
+        rather than per-field. Semantically "" and "unset" mean the same thing
+        for configuration, and for the string settings the default is usually ""
+        anyway, so no behaviour changes.
+        """
+        if isinstance(values, dict):
+            return {
+                k: v for k, v in values.items()
+                if not (isinstance(v, str) and v.strip() == "")
+            }
+        return values
+
     @field_validator("database_url")
     @classmethod
     def validate_db(cls, v: str) -> str:
