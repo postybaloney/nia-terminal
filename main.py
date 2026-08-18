@@ -135,14 +135,32 @@ async def cmd_analyze() -> None:
 
 
 async def cmd_digest(send: bool = False) -> None:
+    """
+    Weekly patent digest.
+
+    FIXED 2026-08-18. The previous version computed
+        total_new = sum(IngestRun.new_patents)          # ALL TIME
+    and passed it into a prompt reading "This week's data: New patents
+    ingested: {n}". On 2026-08-17 that made the model write "This week, we
+    ingested 1645 new patents" for a week whose real total was 0. It also
+    hardcoded sources=[..., "lens", ...] — claiming a data source dropped for
+    non-commercial licensing reasons. Both are now derived from what actually
+    happened in the window.
+    """
+    from datetime import datetime, timedelta, timezone
+
     from config import settings
     from analysis import generate_weekly_digest
     from db import get_session
-    from db.models import AnalysisResult, IngestRun
+    from db.models import AnalysisResult, IngestRun, RawPatent
     from notifiers import dispatch_digest
+
+    window_days = 7
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
     with get_session() as session:
         from sqlalchemy import func
+
         latest = (
             session.query(AnalysisResult)
             .order_by(AnalysisResult.created_at.desc())
@@ -150,14 +168,54 @@ async def cmd_digest(send: bool = False) -> None:
         )
         if latest:
             session.expunge(latest)
-        total_new = (
-            session.query(func.sum(IngestRun.new_patents))
-            .scalar() or 0
+
+        # Only runs inside the window, and only runs that actually happened.
+        week_new = (
+            session.query(func.coalesce(func.sum(IngestRun.new_patents), 0))
+            .filter(IngestRun.started_at >= cutoff)
+            .scalar()
+        ) or 0
+
+        corpus_total = session.query(func.count(RawPatent.id)).scalar() or 0
+
+        # Sources that genuinely contributed in the window — never hardcoded.
+        rows = (
+            session.query(IngestRun.sources)
+            .filter(IngestRun.started_at >= cutoff)
+            .all()
         )
+        used: set[str] = set()
+        for (srcs,) in rows:
+            for x in (srcs or []):
+                used.add(x)
+        real_sources = sorted(used) or ["(no ingest runs in window)"]
+
+    console.print(
+        f"[dim]window={window_days}d  new_this_week={week_new}  "
+        f"corpus_total={corpus_total}  sources={', '.join(real_sources)}[/dim]"
+    )
+
+    if week_new == 0:
+        # Do not ask a language model to narrate a week that had no intake.
+        # It will invent one — that is exactly how "1645 new patents" happened.
+        console.print(
+            "\n[bold]--- WEEKLY PATENT INTELLIGENCE DIGEST ---[/bold]\n"
+        )
+        digest = (
+            f"No new patents were ingested in the last {window_days} days. "
+            f"The corpus currently holds {corpus_total:,} records from "
+            f"{', '.join(real_sources)}. No digest narrative is generated for "
+            f"an empty window."
+        )
+        console.print(digest)
+        if send:
+            await dispatch_digest(digest_text=digest, new_count=0, run_id=0)
+            console.print("[green]OK Dispatch complete[/green]")
+        return
 
     digest = await generate_weekly_digest(
-        new_count=total_new,
-        sources=["patentsview", "epo", "lens", "bigquery"],
+        new_count=week_new,
+        sources=real_sources,
         queries=settings.query_list,
         latest_analysis=latest,
     )
@@ -166,8 +224,8 @@ async def cmd_digest(send: bool = False) -> None:
 
     if send:
         console.print("\n[bold]Dispatching digest via email/Slack...[/bold]")
-        await dispatch_digest(digest_text=digest, new_count=total_new, run_id=0)
-        console.print("[green]✓ Dispatch complete[/green]")
+        await dispatch_digest(digest_text=digest, new_count=week_new, run_id=0)
+        console.print("[green]OK Dispatch complete[/green]")
 
 
 async def cmd_run_theses() -> None:
@@ -391,6 +449,162 @@ def cmd_scheduler() -> None:
     sched_module.main()
 
 
+async def cmd_doctor(only: str | None = None) -> None:
+    """
+    Probe every data source independently and print a pass/fail table.
+
+    Exists because this pipeline runs unattended and its failures are quiet:
+    a 403 on one query used to zero an entire run while still printing eleven
+    lines of "fetched=50". When something breaks, run this and paste the table.
+    """
+    import time
+
+    from config import settings
+
+    checks: list[tuple[str, str, str, str]] = []   # source, status, detail, timing
+
+    async def probe(label: str, coro):
+        t0 = time.time()
+        try:
+            n = await coro
+            dt = f"{time.time() - t0:.1f}s"
+            if n is None:
+                checks.append((label, "SKIP", "not configured", dt))
+            elif n == 0:
+                checks.append((label, "WARN", "reachable, 0 records", dt))
+            else:
+                checks.append((label, "OK", f"{n} records", dt))
+        except Exception as exc:
+            checks.append((label, "FAIL", f"{type(exc).__name__}: {str(exc)[:70]}",
+                           f"{time.time() - t0:.1f}s"))
+
+    q = settings.signal_query_list[:2]
+    since = settings.signal_since
+
+    want = (only or "").lower()
+
+    def run(name: str) -> bool:
+        return not want or want == name
+
+    if run("epo"):
+        from ingestors.epo import EPOIngestor
+        async def _epo():
+            if not settings.epo_enabled:
+                return None
+            ing = EPOIngestor(settings.query_list, settings.backfill_from, 10)
+            from neuro_taxonomy import NEURO_QUERIES
+            ing._queries = lambda: list(NEURO_QUERIES[:1])
+            recs = await ing.fetch()
+            return len(recs)
+        await probe("epo (patents)", _epo())
+
+    if run("feeds"):
+        from ingestors.signals.feeds import FeedIngestor, FEED_REGISTRY
+        for f in FEED_REGISTRY:
+            async def _one(f=f):
+                ing = FeedIngestor(q, since, 20, feeds=(f,))
+                recs = await ing.fetch()
+                if ing.query_errors:
+                    raise RuntimeError(ing.query_errors[0])
+                return len(recs)
+            await probe(f"feed:{f.key}", _one())
+
+    if run("preprints"):
+        from ingestors.signals.preprints import PreprintIngestor
+        async def _pre():
+            ing = PreprintIngestor(q, since, 20)
+            import ingestors.signals.preprints as m
+            orig = m.ARXIV_QUERIES
+            m.ARXIV_QUERIES = orig[:1]
+            try:
+                recs = await ing.fetch()
+            finally:
+                m.ARXIV_QUERIES = orig
+            return len(recs)
+        await probe("arxiv + biorxiv", _pre())
+
+    if run("jobs"):
+        from ingestors.signals.jobs import JobBoardIngestor, BOARDS
+        async def _jobs():
+            ing = JobBoardIngestor(q, since, 20)
+            recs = await ing.fetch()
+            console.print(
+                f"[dim]  boards resolved: {len(ing.resolved)}/{len(BOARDS)}[/dim]"
+            )
+            if ing.unresolved:
+                console.print(
+                    f"[yellow]  unresolved slugs (edit ingestors/signals/jobs.py): "
+                    f"{', '.join(ing.unresolved)}[/yellow]"
+                )
+            return len(recs)
+        await probe("ats job boards", _jobs())
+
+    if run("edgar"):
+        from ingestors.signals.edgar import EdgarIngestor
+        async def _sec():
+            ing = EdgarIngestor(q, since, 20)
+            import ingestors.signals.edgar as m
+            orig = m.EDGAR_PHRASES
+            m.EDGAR_PHRASES = orig[:1]
+            try:
+                recs = await ing.fetch()
+            finally:
+                m.EDGAR_PHRASES = orig
+            return len(recs)
+        await probe("sec edgar", _sec())
+
+    if run("db"):
+        async def _db():
+            from db import get_session
+            from db.models import RawPatent
+            from sqlalchemy import func
+            with get_session() as s_:
+                return s_.query(func.count(RawPatent.id)).scalar() or 0
+        await probe("database", _db())
+
+    table = Table(title="NIA Source Doctor")
+    table.add_column("Source", style="dim")
+    table.add_column("Status")
+    table.add_column("Detail")
+    table.add_column("Time", justify="right", style="dim")
+    for label, status, detail, dt in checks:
+        colour = {"OK": "green", "WARN": "yellow",
+                  "FAIL": "red", "SKIP": "dim"}[status]
+        table.add_row(label, f"[{colour}]{status}[/{colour}]", detail, dt)
+    console.print(table)
+
+    bad = [c for c in checks if c[1] == "FAIL"]
+    if bad:
+        console.print(f"[red]{len(bad)} source(s) failing.[/red] "
+                      "Paste this table when reporting the problem.")
+    else:
+        console.print("[green]All probed sources reachable.[/green]")
+
+
+def cmd_graph(demo: bool = False, out: str = "nia_graph.sqlite",
+              html: str = "nia_graph.html", max_nodes: int = 650) -> None:
+    """Build the knowledge graph and render the self-contained HTML view."""
+    import subprocess
+    import sys as _sys
+
+    build = [_sys.executable, "graph_build.py", "--out", out]
+    if demo:
+        build.append("--demo")
+    console.print("[bold]Building knowledge graph...[/bold]")
+    r = subprocess.run(build)
+    if r.returncode != 0:
+        console.print("[red]graph build failed[/red]")
+        _sys.exit(1)
+
+    console.print("[bold]Rendering graph HTML...[/bold]")
+    r = subprocess.run([_sys.executable, "graph_render.py", "--db", out,
+                        "--out", html, "--max-nodes", str(max_nodes)])
+    if r.returncode != 0:
+        console.print("[red]graph render failed[/red]")
+        _sys.exit(1)
+    console.print(f"[green]OK {html}[/green]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Patent Intelligence CLI")
     sub = parser.add_subparsers(dest="command")
@@ -414,6 +628,13 @@ def main() -> None:
     dsig_p.add_argument("--send", action="store_true", help="Send via email/Slack after printing")
     orcid_p = sub.add_parser("backfill-orcid", help="Backfill ORCID/OpenAlex author URLs for existing theses")
     orcid_p.add_argument("--dry-run", action="store_true", help="Preview without writing to DB")
+    doc_p = sub.add_parser("doctor", help="Probe every data source, print pass/fail")
+    doc_p.add_argument("--only", help="probe one: epo|feeds|preprints|jobs|edgar|db")
+    g_p = sub.add_parser("graph", help="Build + render the knowledge graph")
+    g_p.add_argument("--demo", action="store_true", help="synthetic corpus, no DB needed")
+    g_p.add_argument("--out", default="nia_graph.sqlite")
+    g_p.add_argument("--html", default="nia_graph.html")
+    g_p.add_argument("--max-nodes", type=int, default=650)
     sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
 
     args = parser.parse_args()
@@ -456,6 +677,11 @@ def main() -> None:
         asyncio.run(cmd_digest_signals(send=getattr(args, "send", False)))
     elif args.command == "backfill-orcid":
         asyncio.run(cmd_backfill_orcid(dry_run=getattr(args, "dry_run", False)))
+    elif args.command == "doctor":
+        asyncio.run(cmd_doctor(getattr(args, "only", None)))
+    elif args.command == "graph":
+        cmd_graph(demo=getattr(args, "demo", False), out=args.out,
+                  html=args.html, max_nodes=getattr(args, "max_nodes", 650))
     elif args.command == "scheduler":
         cmd_scheduler()
     else:

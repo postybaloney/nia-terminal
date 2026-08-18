@@ -25,6 +25,12 @@ from ingestors.signals.base import NormalizedSignal
 from ingestors.signals.clinicaltrials import ClinicalTrialsIngestor
 from ingestors.signals.nih_reporter import NIHReporterIngestor
 from ingestors.signals.openfda import OpenFDAIngestor
+# Added 2026-08-18 — the narrative / leading-indicator layer.
+from ingestors.signals.edgar import EdgarIngestor
+from ingestors.signals.feeds import FeedIngestor
+from ingestors.signals.jobs import JobBoardIngestor
+from ingestors.signals.preprints import PreprintIngestor
+from neuro_taxonomy import score_record
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +66,15 @@ async def run_signal_pipeline() -> SignalPipelineResult:
         NIHReporterIngestor(queries, since, per_page),
         ClinicalTrialsIngestor(queries, since, per_page),
         OpenFDAIngestor(queries, since, per_page),
+        # Narrative + leading-indicator sources. Each is free and
+        # unauthenticated; each isolates its own per-source failures so one
+        # dead feed can never zero a run.
+        FeedIngestor(queries, since, per_page),
+        PreprintIngestor(queries, since, per_page),
+        JobBoardIngestor(queries, since, per_page),
+        EdgarIngestor(queries, since, per_page,
+                      contact_email=getattr(settings, "contact_email", "")
+                      or "research@epsilonsolutionsllc.com"),
     ]
 
     errors: list[str] = []
@@ -78,6 +93,44 @@ async def run_signal_pipeline() -> SignalPipelineResult:
             all_signals.extend(result)
 
     log.info("signal pipeline: total fetched: %d", len(all_signals))
+
+    # ── RELEVANCE GATE (added 2026-08-18) ────────────────────────────────────
+    # NIH RePORTER and ClinicalTrials.gov do loose text matching, so a query
+    # for "neurostimulation" returns things like "Integrated Multimodal Digital
+    # Health Intervention for Type 2 Diabetes" and "The Unintended Consequences
+    # of Consumer Wearables". Both appeared in the 2026-08-17 digest as
+    # neurotech signals. Same class of error as the robot-vacuum patents.
+    #
+    # Sources that are neurotech-by-construction, or that already ran the gate
+    # inside their own ingestor, bypass it here rather than being scored twice.
+    PRE_FILTERED_PREFIXES = ("rss:", "jobs:", "arxiv", "biorxiv", "medrxiv", "sec_edgar")
+
+    gated: list[NormalizedSignal] = []
+    rejected = 0
+    reject_examples: list[str] = []
+
+    for s in all_signals:
+        if any((s.source or "").startswith(p) for p in PRE_FILTERED_PREFIXES):
+            gated.append(s)
+            continue
+        rel = score_record(s.title, s.summary, list(s.tags or []))
+        if rel.tier in ("core", "adjacent"):
+            s.raw_payload = {**(s.raw_payload or {}),
+                             "relevance_score": rel.score,
+                             "relevance_tier": rel.tier,
+                             "relevance_reasons": rel.reasons}
+            gated.append(s)
+        else:
+            rejected += 1
+            if len(reject_examples) < 3 and s.title:
+                reject_examples.append(s.title[:70])
+
+    if rejected:
+        log.info("signal pipeline: relevance gate dropped %d/%d off-topic records",
+                 rejected, len(all_signals))
+        for ex in reject_examples:
+            log.info("signal pipeline:   rejected e.g. %r", ex)
+    all_signals = gated
 
     # Dedup by (source, source_id) — a record can match multiple queries
     seen: dict[tuple, NormalizedSignal] = {}
@@ -105,12 +158,38 @@ async def run_signal_pipeline() -> SignalPipelineResult:
     )
 
 
+# Column length limits from db/signal_models.py. Anything longer is truncated
+# before insert rather than being allowed to abort the whole stage.
+#
+# Added 2026-08-18 after a run died with:
+#   DataError: value too long for type character varying(64)
+# — an ATS job posting whose location string ("Remote - United States;
+# San Francisco, CA; ...") overflowed `status`. One over-long string from one
+# posting took down the entire signals stage, which is the same failure shape
+# as the EPO 403 that zeroed the patent run: a single bad record must never
+# cost the batch. Clamping centrally guards every current AND future ingestor,
+# since field lengths are exactly the thing nobody remembers to check.
+_MAXLEN = {"source": 32, "source_id": 128, "signal_type": 16, "status": 64}
+
+
+def _clamp(sig: NormalizedSignal) -> NormalizedSignal:
+    for field_name, limit in _MAXLEN.items():
+        val = getattr(sig, field_name, None)
+        if isinstance(val, str) and len(val) > limit:
+            log.debug("signal pipeline: truncating %s (%d>%d) on %s:%s",
+                      field_name, len(val), limit, sig.source, sig.source_id[:40])
+            setattr(sig, field_name, val[:limit])
+    return sig
+
+
 def _upsert_signals(
     signals: list[NormalizedSignal],
 ) -> tuple[int, int, list[NormalizedSignal]]:
     new_count = 0
     updated_count = 0
     new_records: list[NormalizedSignal] = []
+
+    signals = [_clamp(s) for s in signals]
 
     with get_session() as session:
         for s in signals:
