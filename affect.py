@@ -402,12 +402,16 @@ async def preflight() -> tuple[bool, str]:
         from analysis import FatalLLMError, _llm
     except Exception as exc:
         return False, f"LLM unavailable: {exc}"
-    probe = {"type": "object",
-             "properties": {"ok": {"type": "boolean"}},
-             "required": ["ok"], "additionalProperties": False}
+    # Deliberately NO schema and a generous token budget. Preflight answers one
+    # question — can this backend be reached with this model — and conflating
+    # it with "does strict schema validation work" is what turned a working
+    # model into a hard abort: gpt-oss spends tokens reasoning before it
+    # answers, so a 32-token schema-constrained probe truncated mid-thought and
+    # failed validation. Schema problems are per-record and degrade gracefully;
+    # only reachability should be able to stop a whole batch.
     try:
-        await _llm("You reply with strict JSON only.",
-                   'Reply exactly {"ok": true}', max_tokens=32, schema=probe)
+        await _llm("You reply with JSON only.",
+                   'Reply with {"ok": true}', max_tokens=256)
         return True, ""
     except FatalLLMError as exc:
         return False, str(exc)

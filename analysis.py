@@ -129,7 +129,8 @@ def _is_fatal(exc: Exception) -> bool:
 _EMPTY_SENTINELS = {"", "none", "null", "nil", "default", "-", "n/a", "unset"}
 
 
-def _resolve_model(configured: str | None, default: str) -> str:
+def _normalise_model_str(configured: str | None) -> str:
+    """Reduce a configured model name to '' when it means 'unset'."""
     m = (configured or "").strip()
     # Strip surrounding quotes: setting a secret to '' or "" stores the QUOTE
     # CHARACTERS, not an empty value. GitHub Actions has no way to express
@@ -138,7 +139,11 @@ def _resolve_model(configured: str | None, default: str) -> str:
         m = m[1:-1].strip()
     if m.lower() in _EMPTY_SENTINELS:
         m = ""
-    m = m or default
+    return m
+
+
+def _resolve_model(configured: str | None, default: str) -> str:
+    m = _normalise_model_str(configured) or default
     if m in _RETIRED_MODELS:
         sub = _RETIRED_MODELS[m]
         log.warning("analysis: model %r has been retired by the provider; "
@@ -165,11 +170,15 @@ async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
             {"role": "user", "content": prompt},
         ],
     }
+    is_gpt_oss = model.startswith("openai/gpt-oss")
+    if is_gpt_oss:
+        # gpt-oss is a REASONING model: it emits reasoning tokens before the
+        # answer. Left at default effort it can spend the whole token budget
+        # thinking and return truncated — therefore invalid — JSON. Extraction
+        # is not a reasoning task, so keep the budget for the answer.
+        kwargs["reasoning_effort"] = "low"
     if schema:
-        # Groq enforces schema-constrained decoding with strict:true, but only
-        # on the gpt-oss family. Requesting it elsewhere errors, so it is only
-        # attached when the model supports it.
-        if model.startswith("openai/gpt-oss"):
+        if is_gpt_oss:
             kwargs["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "extraction", "strict": True,
@@ -177,12 +186,30 @@ async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
             }
         else:
             kwargs["response_format"] = {"type": "json_object"}
+
     try:
         response = await client.chat.completions.create(**kwargs)
     except Exception as exc:
         if _is_fatal(exc):
             raise FatalLLMError(f"groq/{model}: {exc}") from exc
-        raise
+        # Strict schema validation is brittle: the model can produce sound
+        # content that the validator rejects, and Groq returns 400
+        # json_validate_failed rather than degrading. Falling back to plain
+        # JSON mode keeps the run alive — affect.py already parses and
+        # validates defensively, so the schema is an optimisation, not a
+        # dependency.
+        if schema and "json_validate_failed" in str(exc):
+            log.warning("analysis: strict schema rejected by %s; "
+                        "retrying in plain JSON mode", model)
+            kwargs["response_format"] = {"type": "json_object"}
+            try:
+                response = await client.chat.completions.create(**kwargs)
+            except Exception as exc2:
+                if _is_fatal(exc2):
+                    raise FatalLLMError(f"groq/{model}: {exc2}") from exc2
+                raise
+        else:
+            raise
     return response.choices[0].message.content
 
 
@@ -291,11 +318,18 @@ async def _llm(system: str, prompt: str, max_tokens: int = 2000,
     Defaults to groq if not set.
     """
     backend = (settings.llm_backend or "groq").lower()
-    configured = (settings.llm_model or "").strip()
-    # The model name may be redacted in CI logs when it comes from a secret, so
-    # also log its SOURCE and length — neither is secret, and between them they
-    # identify the problem without exposing anything.
-    source = f"LLM_MODEL env ({len(configured)} chars)" if configured else "backend default"
+    raw = (settings.llm_model or "").strip()
+    # Report the source AFTER normalisation. The previous version reported the
+    # raw value, so a secret set to '' logged "LLM_MODEL env (2 chars)" even
+    # though the quotes had been stripped and the default was actually used —
+    # true but misleading, which is the worst kind of log line.
+    normalised = _normalise_model_str(raw)
+    if not raw:
+        source = "backend default (LLM_MODEL unset)"
+    elif not normalised:
+        source = f"backend default (LLM_MODEL was {len(raw)} chars, read as empty)"
+    else:
+        source = f"LLM_MODEL env ({len(normalised)} chars)"
     log.info("analysis: backend=%s  model source=%s", backend, source)
 
     dispatch = {
