@@ -122,8 +122,23 @@ def _is_fatal(exc: Exception) -> bool:
     ))
 
 
+# Values people type when they mean "unset". A config system that takes these
+# literally sends them to the provider as a model name, which 404s with an
+# error the log then redacts — because the value came from a secret. That was
+# an afternoon of confusion, so they are normalised here instead.
+_EMPTY_SENTINELS = {"", "none", "null", "nil", "default", "-", "n/a", "unset"}
+
+
 def _resolve_model(configured: str | None, default: str) -> str:
-    m = (configured or "").strip() or default
+    m = (configured or "").strip()
+    # Strip surrounding quotes: setting a secret to '' or "" stores the QUOTE
+    # CHARACTERS, not an empty value. GitHub Actions has no way to express
+    # "empty" other than deleting the secret, so this is a common mistake.
+    if len(m) >= 2 and m[0] == m[-1] and m[0] in "\"'":
+        m = m[1:-1].strip()
+    if m.lower() in _EMPTY_SENTINELS:
+        m = ""
+    m = m or default
     if m in _RETIRED_MODELS:
         sub = _RETIRED_MODELS[m]
         log.warning("analysis: model %r has been retired by the provider; "
@@ -276,8 +291,12 @@ async def _llm(system: str, prompt: str, max_tokens: int = 2000,
     Defaults to groq if not set.
     """
     backend = (settings.llm_backend or "groq").lower()
-    model_label = settings.llm_model or "(default)"
-    log.info("analysis: using backend=%s model=%s", backend, model_label)
+    configured = (settings.llm_model or "").strip()
+    # The model name may be redacted in CI logs when it comes from a secret, so
+    # also log its SOURCE and length — neither is secret, and between them they
+    # identify the problem without exposing anything.
+    source = f"LLM_MODEL env ({len(configured)} chars)" if configured else "backend default"
+    log.info("analysis: backend=%s  model source=%s", backend, source)
 
     dispatch = {
         "groq": _call_groq,
