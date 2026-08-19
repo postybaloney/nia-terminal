@@ -35,6 +35,12 @@ jobs:
       # --- set these in GitHub → repo Settings → Secrets and variables → Actions ---
       DATABASE_URL:      ${{ secrets.DATABASE_URL }}       # Neon connection string (postgresql://...sslmode=require)
       LLM_BACKEND:       ${{ secrets.LLM_BACKEND }}        # e.g. groq
+      # Optional override. LEAVE THE SECRET UNSET unless you have a reason:
+      # empty means "let the backend pick its own current default", which is
+      # what survives a provider retiring a model. Until 2026-08-19 this line
+      # was missing entirely, so setting the LLM_MODEL secret had no effect at
+      # all — the variable never reached the job.
+      LLM_MODEL:         ${{ secrets.LLM_MODEL }}
       GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
       OPENFDA_API_KEY:   ${{ secrets.OPENFDA_API_KEY }}    # optional
       EPO_CLIENT_ID:     ${{ secrets.EPO_CLIENT_ID }}      # optional
