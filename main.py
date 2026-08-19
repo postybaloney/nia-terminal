@@ -581,6 +581,18 @@ async def cmd_doctor(only: str | None = None) -> None:
         console.print("[green]All probed sources reachable.[/green]")
 
 
+def cmd_reindex(apply: bool = False, limit: int | None = None) -> None:
+    """Re-score the stored corpus against the current taxonomy."""
+    import subprocess
+    import sys as _sys
+    cmd = [_sys.executable, "reindex.py"]
+    if apply:
+        cmd.append("--apply")
+    if limit:
+        cmd += ["--limit", str(limit)]
+    _sys.exit(subprocess.run(cmd).returncode)
+
+
 def cmd_audit_gate(demo: bool = False) -> None:
     """Check whether any relevance tier is acting as an uncertainty sink."""
     import subprocess
@@ -599,6 +611,10 @@ async def cmd_affect(limit: int = 200, force: bool = False) -> None:
     table = Table(title="Entity Affect Extraction")
     table.add_column("Metric", style="dim")
     table.add_column("Value", style="bold")
+    if st.get("aborted"):
+        console.print(f"[red]ABORTED:[/red] {st['aborted']}")
+        console.print("[yellow]Nothing was written. Fix the backend and re-run — "
+                      "the pass is resumable.[/yellow]")
     for k, label in (("considered", "Records considered"),
                      ("gated_out", "  skipped by gate (no verdict possible)"),
                      ("attempted", "LLM calls made"),
@@ -679,6 +695,9 @@ def main() -> None:
     g_p.add_argument("--out", default="nia_graph.sqlite")
     g_p.add_argument("--html", default="nia_graph.html")
     g_p.add_argument("--max-nodes", type=int, default=650)
+    ri_p = sub.add_parser("reindex", help="Re-score stored corpus against current taxonomy")
+    ri_p.add_argument("--apply", action="store_true", help="actually remove (default: dry run)")
+    ri_p.add_argument("--limit", type=int, default=None)
     ag_p = sub.add_parser("audit-gate", help="Check relevance tiers for uncertainty sinks")
     ag_p.add_argument("--demo", action="store_true")
     af_p = sub.add_parser("affect", help="Extract entity-level sentiment/valence")
@@ -736,6 +755,8 @@ def main() -> None:
         asyncio.run(cmd_backfill_orcid(dry_run=getattr(args, "dry_run", False)))
     elif args.command == "doctor":
         asyncio.run(cmd_doctor(getattr(args, "only", None)))
+    elif args.command == "reindex":
+        cmd_reindex(apply=getattr(args, "apply", False), limit=args.limit)
     elif args.command == "audit-gate":
         cmd_audit_gate(demo=getattr(args, "demo", False))
     elif args.command == "affect":

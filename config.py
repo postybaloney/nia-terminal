@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     #   LLM_BACKEND=huggingface → set HUGGINGFACE_TOKEN
     #   LLM_BACKEND=anthropic   → set ANTHROPIC_API_KEY (paid)
     llm_backend: str = "groq"
-    llm_model: str = "llama-3.3-70b-versatile"
+    # Empty means "let the backend choose its own current default", which is
+    # the safe setting: providers retire models (Groq retired
+    # llama-3.3-70b-versatile on 2026-08-16) and a hardcoded name becomes a
+    # 404 on every call. analysis._RETIRED_MODELS also remaps known-dead names.
+    llm_model: str = ""
 
     # API keys — only the one matching LLM_BACKEND is required
     groq_api_key: str = ""

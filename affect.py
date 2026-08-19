@@ -129,6 +129,42 @@ _FEWSHOT = [
 ]
 
 
+# JSON Schema handed to the backend for CONSTRAINED DECODING. Ollama enforces
+# it natively via grammar-constrained generation; Groq enforces it with
+# strict:true on the gpt-oss family. Where enforced, malformed output becomes
+# impossible rather than merely unlikely — the parser below stays as the
+# fallback for backends that don't enforce, and as a guard against a model that
+# satisfies the schema while writing nonsense.
+#
+# Groq's strict mode requires every property listed in `required` and
+# additionalProperties:false at every level.
+AFFECT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "type": {"type": "string", "enum": list(NEUROTECH_ENTITY_TYPES)},
+                    "sentiment": {"type": "string",
+                                  "enum": ["positive", "neutral", "negative"]},
+                    "valence": {"type": "number"},
+                    "arousal": {"type": "number"},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["text", "type", "sentiment", "valence",
+                             "arousal", "evidence"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["entities"],
+    "additionalProperties": False,
+}
+
+
 @dataclass
 class AffectEntity:
     text: str
@@ -330,17 +366,53 @@ def verify_grounding(result: AffectResult, title: str | None,
 
 async def extract(title: str | None, body: str | None,
                   max_entities: int = 5) -> AffectResult:
-    """Extract entity affect using whichever LLM backend NIA is configured for."""
+    """
+    Extract entity affect using whichever LLM backend NIA is configured for.
+
+    Fatal errors are re-raised, not swallowed. An unknown model or a bad key
+    fails identically on every record, so a caller looping over a corpus must
+    be able to stop rather than convert one configuration mistake into N
+    identical failures.
+    """
     try:
-        from analysis import _llm
+        from analysis import FatalLLMError, _llm
     except Exception as exc:
         return AffectResult(ok=False, error=f"LLM unavailable: {exc}")
     try:
         raw = await _llm(_SYSTEM, build_prompt(title, body, max_entities),
-                         max_tokens=900)
+                         max_tokens=900, schema=AFFECT_SCHEMA)
+    except FatalLLMError:
+        raise
     except Exception as exc:
         return AffectResult(ok=False, error=f"{type(exc).__name__}: {exc}")
     return verify_grounding(parse(raw), title, body)
+
+
+async def preflight() -> tuple[bool, str]:
+    """
+    One cheap call to prove the backend works before processing a batch.
+
+    This exists because of a real incident: a retired Groq model produced 100
+    consecutive identical 404s, one per record, and the run reported
+    "100 attempted, 0 succeeded". The information needed to stop was present
+    after the first call. Failing in one call rather than a hundred is the
+    whole job of this function.
+    """
+    try:
+        from analysis import FatalLLMError, _llm
+    except Exception as exc:
+        return False, f"LLM unavailable: {exc}"
+    probe = {"type": "object",
+             "properties": {"ok": {"type": "boolean"}},
+             "required": ["ok"], "additionalProperties": False}
+    try:
+        await _llm("You reply with strict JSON only.",
+                   'Reply exactly {"ok": true}', max_tokens=32, schema=probe)
+        return True, ""
+    except FatalLLMError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 # ── offline self-test: everything except the model call ─────────────────────
@@ -458,9 +530,18 @@ async def run_batch(limit: int = 200, force: bool = False) -> dict:
     from db import get_session
     from db.signal_models import Signal
 
+    from analysis import FatalLLMError
+
     log = logging.getLogger("affect")
     stats = {"considered": 0, "gated_out": 0, "attempted": 0,
-             "ok": 0, "failed": 0, "entities": 0, "ungrounded_dropped": 0}
+             "ok": 0, "failed": 0, "entities": 0, "ungrounded_dropped": 0,
+             "aborted": "", }
+
+    ok, why = await preflight()
+    if not ok:
+        stats["aborted"] = why
+        log.error("affect: backend unusable, nothing attempted — %s", why)
+        return stats
 
     with get_session() as s:
         rows = s.query(Signal).order_by(Signal.first_seen_at.desc()).limit(limit * 4).all()
@@ -477,13 +558,33 @@ async def run_batch(limit: int = 200, force: bool = False) -> dict:
             if len(work) >= limit:
                 break
 
+    # Circuit breaker. Even past preflight a backend can fail mid-run — a key
+    # revoked, a rate limit that never clears. Repeating the same error for the
+    # rest of the batch produces noise, burns quota and teaches nobody
+    # anything, so consecutive failures stop the run.
+    MAX_CONSECUTIVE = 5
+    consecutive = 0
+
     for sid, title, summary in work:
         stats["attempted"] += 1
-        res = await extract(title, summary)
+        try:
+            res = await extract(title, summary)
+        except FatalLLMError as exc:
+            stats["failed"] += 1
+            stats["aborted"] = str(exc)
+            log.error("affect: fatal backend error, aborting batch — %s", exc)
+            break
         if not res.ok:
             stats["failed"] += 1
+            consecutive += 1
             log.warning("affect: signal %s failed: %s", sid, res.error)
+            if consecutive >= MAX_CONSECUTIVE:
+                stats["aborted"] = (
+                    f"{MAX_CONSECUTIVE} consecutive failures; last: {res.error}")
+                log.error("affect: %s — aborting batch", stats["aborted"])
+                break
             continue
+        consecutive = 0
         stats["ok"] += 1
         g = res.grounded_entities
         stats["entities"] += len(g)

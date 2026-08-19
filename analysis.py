@@ -89,7 +89,51 @@ Paragraph 3 — Strategic signals: white space, competitive moves, academic-to-c
 
 # ── Backend implementations ───────────────────────────────────────────────────
 
-async def _call_groq(system: str, prompt: str, max_tokens: int = 2000) -> str:
+# Models that providers have retired, mapped to their named successors.
+# A retired model returns 404 model_not_found, which never recovers on retry —
+# so it is remapped here rather than left to fail on every call. Groq retired
+# llama-3.3-70b-versatile on 2026-08-16 and named gpt-oss-120b as the successor.
+_RETIRED_MODELS: dict[str, str] = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768": "openai/gpt-oss-20b",
+    "gemma2-9b-it": "openai/gpt-oss-20b",
+}
+
+
+class FatalLLMError(RuntimeError):
+    """
+    A configuration error that will NEVER succeed on retry — unknown model,
+    bad credentials, revoked access.
+
+    Distinguished from transient errors on purpose. A batch job that cannot
+    tell the difference will happily repeat an unrecoverable 404 once per
+    record; this type is what lets callers stop after the first one.
+    """
+
+
+def _is_fatal(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(k in msg for k in (
+        "model_not_found", "does not exist or you do not have access",
+        "invalid_api_key", "incorrect api key", "authentication",
+        "unauthorized", "401", "403", "permission",
+    ))
+
+
+def _resolve_model(configured: str | None, default: str) -> str:
+    m = (configured or "").strip() or default
+    if m in _RETIRED_MODELS:
+        sub = _RETIRED_MODELS[m]
+        log.warning("analysis: model %r has been retired by the provider; "
+                    "using %r instead. Update LLM_MODEL to silence this.", m, sub)
+        return sub
+    return m
+
+
+async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
+                     schema: dict | None = None) -> str:
     """
     Groq Cloud — FREE tier, no credit card.
     Models: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768
@@ -97,14 +141,33 @@ async def _call_groq(system: str, prompt: str, max_tokens: int = 2000) -> str:
     """
     from groq import AsyncGroq
     client = AsyncGroq(api_key=settings.groq_api_key)
-    response = await client.chat.completions.create(
-        model=settings.llm_model or "llama-3.3-70b-versatile",
-        max_tokens=max_tokens,
-        messages=[
+    model = _resolve_model(settings.llm_model, "openai/gpt-oss-120b")
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-    )
+    }
+    if schema:
+        # Groq enforces schema-constrained decoding with strict:true, but only
+        # on the gpt-oss family. Requesting it elsewhere errors, so it is only
+        # attached when the model supports it.
+        if model.startswith("openai/gpt-oss"):
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "extraction", "strict": True,
+                                "schema": schema},
+            }
+        else:
+            kwargs["response_format"] = {"type": "json_object"}
+    try:
+        response = await client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        if _is_fatal(exc):
+            raise FatalLLMError(f"groq/{model}: {exc}") from exc
+        raise
     return response.choices[0].message.content
 
 
@@ -128,7 +191,8 @@ async def _call_gemini(system: str, prompt: str, max_tokens: int = 2000) -> str:
     return response.text
 
 
-async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000) -> str:
+async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000,
+                       schema: dict | None = None) -> str:
     """
     Ollama — 100% local, FREE, no account needed.
     Install: https://ollama.com
@@ -138,14 +202,32 @@ async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000) -> str:
     Other good choices: mistral, phi4, qwen2.5
     """
     import ollama
-    response = await ollama.AsyncClient().chat(
-        model=settings.llm_model or "llama3.2",
-        messages=[
+    model = _resolve_model(settings.llm_model, "gemma4:12b")
+    kwargs: dict = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        options={"num_predict": max_tokens},
-    )
+        # temperature 0: extraction is not a creative task, and determinism
+        # makes failures reproducible.
+        "options": {"num_predict": max_tokens, "temperature": 0},
+    }
+    if schema:
+        # Ollama's native `format` takes a JSON Schema and enforces it with
+        # GRAMMAR-CONSTRAINED DECODING — the runtime cannot emit tokens that
+        # violate the schema. This eliminates the entire class of parse failure
+        # rather than catching it afterwards, and is the strongest reason to
+        # run Ollama locally.
+        kwargs["format"] = schema
+    try:
+        response = await ollama.AsyncClient().chat(**kwargs)
+    except Exception as exc:
+        if _is_fatal(exc) or "not found, try pulling" in str(exc).lower():
+            raise FatalLLMError(
+                f"ollama/{model}: {exc}\n"
+                f"    Pull it first:  ollama pull {model}") from exc
+        raise
     return response["message"]["content"]
 
 
@@ -187,7 +269,8 @@ async def _call_anthropic(system: str, prompt: str, max_tokens: int = 2000) -> s
     return message.content[0].text
 
 
-async def _llm(system: str, prompt: str, max_tokens: int = 2000) -> str:
+async def _llm(system: str, prompt: str, max_tokens: int = 2000,
+               schema: dict | None = None) -> str:
     """
     Route to the configured backend. Set LLM_BACKEND in .env.
     Defaults to groq if not set.
@@ -210,7 +293,12 @@ async def _llm(system: str, prompt: str, max_tokens: int = 2000) -> str:
             f"Choose from: {', '.join(dispatch)}"
         )
 
-    return await dispatch[backend](system, prompt, max_tokens)
+    fn = dispatch[backend]
+    # Only the backends that actually enforce a schema receive one; the rest
+    # would reject the unexpected keyword.
+    if schema and backend in ("groq", "ollama"):
+        return await fn(system, prompt, max_tokens, schema=schema)
+    return await fn(system, prompt, max_tokens)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
