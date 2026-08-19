@@ -84,6 +84,16 @@ jobs:
       # and the current Intelligence Layer issue — and degrades gracefully: a
       # generator that fails leaves a placeholder page saying so, rather than a
       # broken link or, worse, stale data presented as current.
+      # Affect must run BEFORE the site build: build_site.py rebuilds the graph,
+      # and graph_build reads each signal's stored affect to carry valence onto
+      # its node. Run it afterwards and the deployed graph has no sentiment in
+      # it at all. Capped per night so LLM cost stays bounded; the pass is
+      # resumable, so any backlog drains over successive runs.
+      - name: Extract entity affect (bounded, resumable)
+        if: always()
+        continue-on-error: true
+        run: python main.py affect --limit 100
+
       - name: Build static site (dashboard + graph + issue)
         if: always()
         run: python build_site.py --out site --days 30

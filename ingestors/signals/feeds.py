@@ -32,6 +32,7 @@ import httpx
 
 from ingestors.signals.base import BaseSignalIngestor, NormalizedSignal
 from neuro_taxonomy import classify_tech, score_record
+from textquality import score as score_text
 
 log = logging.getLogger(__name__)
 
@@ -221,6 +222,12 @@ class FeedIngestor(BaseSignalIngestor):
             reasons = [f"{feed.name}: neurotech publication"]
             score = 5
 
+        # Substance vs promotion, scored here because this is the last point
+        # where the full article body exists — downstream only the title
+        # survives into the graph. A vendor announcement and an FDA summary use
+        # the same nouns; this is what tells them apart.
+        tq = score_text(body, title)
+
         source_id = (uid or url or title)[:128]
 
         return NormalizedSignal(
@@ -234,7 +241,8 @@ class FeedIngestor(BaseSignalIngestor):
             amount=None,
             event_date=_parse_date(date_raw),
             status=None,
-            tags=classify_tech(title, body[:3000]),
+            tags=(classify_tech(title, body[:3000])
+                  + (["announcement"] if tq.is_announcement else [])),
             url=url or None,
             matched_query=feed.key,
             raw_payload={
@@ -243,5 +251,12 @@ class FeedIngestor(BaseSignalIngestor):
                 "kind": feed.kind,
                 "relevance_score": score,
                 "relevance_reasons": reasons,
+                # carried downstream so scoring can discount marketing
+                "substance": round(tq.substance, 3),
+                "promotion": round(tq.promotion, 3),
+                "complexity": round(tq.complexity, 3),
+                "quality_weight": round(tq.weight, 3),
+                "is_announcement": tq.is_announcement,
+                "evidence": sorted(set(tq.evidence_found))[:6],
             },
         )

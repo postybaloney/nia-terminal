@@ -45,12 +45,18 @@ def fetch_from_db(days: int):
     from db.signal_models import Signal
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_naive = cutoff.replace(tzinfo=None)
     out = defaultdict(list)
 
     with get_session() as s:
+        # Window on EVENT date — when the clearance was granted, the trial
+        # registered, the award made — not on first_seen_at. first_seen_at is
+        # when the pipeline noticed, which after a database rebuild is "today"
+        # for every row, making the window meaningless.
         sigs = (s.query(Signal)
-                .filter(Signal.first_seen_at >= cutoff)
-                .order_by(Signal.event_date.desc().nullslast())
+                .filter(Signal.event_date.isnot(None))
+                .filter(Signal.event_date >= cutoff_naive)
+                .order_by(Signal.event_date.desc())
                 .all())
         for x in sigs:
             out[x.signal_type or "other"].append({
@@ -60,8 +66,9 @@ def fetch_from_db(days: int):
             })
 
         pats = (s.query(RawPatent)
-                .filter(RawPatent.first_seen_at >= cutoff)
-                .all()) if hasattr(RawPatent, "first_seen_at") else []
+                .filter(RawPatent.grant_date.isnot(None))
+                .filter(RawPatent.grant_date >= cutoff_naive)
+                .all())
         for p in pats:
             out["patent"].append({
                 "title": p.title,
@@ -225,28 +232,55 @@ def build(data, days: int, demo: bool, conns: list[str]):
     md: list[str] = []
 
     md.append(f"# NIA Intelligence Layer")
-    md.append(f"*Issue for the {days} days ending {now:%B %d, %Y}*\n")
+    md.append(
+        f"*Covering {days} days to {now:%B %d, %Y} — dated by when each event "
+        f"occurred, not when it was ingested*\n")
     if demo:
+        md.append("> **NOTE ON THE PERIOD.** The window above does not apply to "
+                  "this issue — the built-in corpus is a fixed set of records "
+                  "spanning 2025 and 2026, shown in full regardless of dates.")
         md.append("> **ILLUSTRATIVE ISSUE.** Regulatory, grant, trial and coverage "
                   "records below are real and were returned by the 2026-08-17 "
                   "pipeline run. This is not a live issue.\n")
 
     if total == 0:
-        md.append("No qualifying records this period. Nothing is reported that "
-                  "the pipeline did not observe.\n")
+        md.append(
+            f"No qualifying records dated in the last {days} days.\n\n"
+            "This is a real result, not an error: the corpus may hold plenty of "
+            "records whose events fall outside the window. Nothing is reported "
+            "that the pipeline did not observe, and no narrative is generated "
+            "for an empty period.\n")
         return "\n".join(md)
 
     # Headline
     counts = {k: len(v) for k, v in data.items() if v}
+    # Resolve before tallying, or one organisation splits across its spellings —
+    # "Boston Scientific Corporation" and "Boston Scientific Corp" were counted
+    # as two different filers with one record each.
+    try:
+        from graph_build import normalise_org
+    except Exception:
+        normalise_org = None
     orgs = Counter()
+    org_display: dict[str, str] = {}
     for recs in data.values():
         for r in recs:
-            if r.get("org"):
-                orgs[r["org"]] += 1
+            nm = r.get("org")
+            if not nm:
+                continue
+            key = normalise_org(nm) if normalise_org else nm.lower()
+            if not key:
+                continue
+            orgs[key] += 1
+            prev = org_display.get(key)
+            if prev is None or len(nm) < len(prev):
+                org_display[key] = nm
     top = orgs.most_common(5)
     grant_total = sum(r.get("amount") or 0 for r in data.get("grant", []))
 
-    md.append("## The week in one paragraph\n")
+    period = ("week" if days <= 9 else "fortnight" if days <= 18
+              else "month" if days <= 45 else f"{days} days")
+    md.append(f"## The {period} in one paragraph\n")
     parts = [f"{n} {k}{'s' if n != 1 else ''}" for k, n in sorted(
         counts.items(), key=lambda x: -x[1])]
     lead = (f"{total} qualifying records: " + ", ".join(parts) + ". ")
@@ -254,7 +288,8 @@ def build(data, days: int, demo: bool, conns: list[str]):
         lead += f"Public award value totalled {money(grant_total)}. "
     if top:
         lead += ("Most active organisations: "
-                 + ", ".join(f"{n} ({c})" for n, c in top[:3]) + ".")
+                 + ", ".join(f"{org_display.get(n, n)} ({c})" for n, c in top[:3])
+                 + ".")
     md.append(lead + "\n")
 
     for key, label, blurb in SECTIONS:

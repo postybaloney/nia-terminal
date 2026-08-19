@@ -153,13 +153,34 @@ def fetch_from_db() -> dict:
 
     # assignees
     counter: Counter = Counter()
+    # Count RESOLVED organisations, not raw strings. Without this the ranking
+    # splits one filer across its spellings — "APPLE INC [US]" vs "APPLE INC.",
+    # "SAMSUNG ELECTRONICS CO LTD [KR]" vs "Samsung Electronics Co., Ltd." —
+    # and understates everyone while looking sloppy.
+    try:
+        from graph_build import normalise_org
+    except Exception:
+        normalise_org = None
+    _display: dict[str, str] = {}
+
     for (assignees,) in assignee_rows:
         if isinstance(assignees, list):
             for a in assignees:
                 name = (a.get("name") or "").strip() if isinstance(a, dict) else ""
-                if name and name.lower() not in ("", "unknown"):
-                    counter[name] += 1
-    top_assignees = [{"label": n, "value": c} for n, c in counter.most_common(10)]
+                if not name or name.lower() in ("", "unknown"):
+                    continue
+                key = normalise_org(name) if normalise_org else name.lower()
+                if not key:
+                    continue
+                counter[key] += 1
+                # Keep the cleanest observed spelling for display: prefer one
+                # without a bracketed country code, then the shortest.
+                prev = _display.get(key)
+                if prev is None or (("[" in prev) and ("[" not in name)) or \
+                   ((("[" in prev) == ("[" in name)) and len(name) < len(prev)):
+                    _display[key] = name
+    top_assignees = [{"label": _display.get(k, k), "value": c}
+                     for k, c in counter.most_common(10)]
 
     signals_by_type = [
         {"label": (t or "?"), "value": c}

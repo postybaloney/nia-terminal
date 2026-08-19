@@ -72,7 +72,15 @@ CREATE TABLE IF NOT EXISTS entities (
     description TEXT,
     source_doc  TEXT,               -- provenance: where we first saw it
     weight      REAL DEFAULT 1.0,   -- degree-derived, filled at finalise()
-    first_seen  TEXT,
+    quality     REAL DEFAULT 1.0,   -- evidence weight from textquality.py:
+                                    -- <1 marketing, >1 evidence-bearing
+    valence     REAL,               -- entity affect (-1 bad .. +1 good), NULL
+                                    -- when never extracted. Distinct from 0.0,
+                                    -- which means "extracted, and neutral".
+    first_seen  TEXT,               -- when NIA saw it (ingest time)
+    event_date  TEXT,               -- when it actually happened (filing, award,
+                                    -- registration, clearance, posting date)
+
     meta        TEXT                -- JSON blob (url, amount, dates...)
 );
 
@@ -118,6 +126,8 @@ _LEGAL_SUFFIXES = (
 _CANONICAL: dict[str, str] = {
     "boston scientific neuromodulation": "boston scientific",
     "boston scientific scimed": "boston scientific",
+    "boston scient scimed": "boston scientific",   # EPO abbreviates SCIENTIFIC
+    "boston scient neuromodulation": "boston scientific",
     "medtronic xomed": "medtronic",
     "medtronic bakken research center": "medtronic",
     "medtronic puerto rico operations": "medtronic",
@@ -137,6 +147,17 @@ _CANONICAL: dict[str, str] = {
     "president and fellows of harvard college": "harvard university",
     "johns hopkins university": "johns hopkins",
     "case western reserve university": "case western reserve",
+    # Non-Latin spellings of the same filer. EPO returns the applicant name in
+    # the original script, so these arrive as entirely separate strings — the
+    # dashboard showed LG Electronics twice, once as 엘지전자 주식회사.
+    "엘지전자 주식회사": "lg electronics",
+    "엘지전자": "lg electronics",
+    "삼성전자 주식회사": "samsung electronics",
+    "삼성전자": "samsung electronics",
+    "주식회사 엘지화학": "lg chem",
+    "株式会社日立製作所": "hitachi",
+    "ソニー株式会社": "sony",
+    "코오롱인더스트리 주식회사": "kolon industries",
 }
 
 
@@ -150,7 +171,11 @@ def normalise_org(name: str) -> str:
     matching — a wrong merge is harder to notice than a missed one.
     """
     s = (name or "").lower().strip()
-    s = re.sub(r"[.,''`\"()]", " ", s)
+    # EPO appends a bracketed country code — "APPLE INC [US]", "LG ELECTRONICS
+    # INC [KR]". Left in place it makes every assignee a separate entity from
+    # its own non-EPO spelling, which is why the dashboard listed Apple twice.
+    s = re.sub(r"\[[a-z]{2}\]", " ", s)
+    s = re.sub(r"[.,''`\"()\[\]]", " ", s)
     s = re.sub(r"[-/&]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
 
@@ -219,6 +244,8 @@ class GraphBuilder:
     def add_entity(
         self, etype: str, name: str, *, subtype: str = "",
         description: str = "", source_doc: str = "", meta: str = "",
+        event_date: str = "", quality: float = 1.0,
+        valence: float | None = None,
     ) -> str | None:
         name = (name or "").strip()
         if not name or len(name) < 2:
@@ -241,10 +268,12 @@ class GraphBuilder:
         if eid not in self._ent_cache:
             self.conn.execute(
                 "INSERT OR IGNORE INTO entities "
-                "(id,name,type,subtype,description,source_doc,first_seen,meta) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "(id,name,type,subtype,description,source_doc,first_seen,meta,"
+                "event_date,quality,valence) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (eid, name, etype, subtype, description[:900], source_doc,
-                 datetime.now(timezone.utc).isoformat(), meta),
+                 datetime.now(timezone.utc).isoformat(), meta, event_date or None,
+                 float(quality),
+                 None if valence is None else float(valence)),
             )
             self._ent_cache[eid] = name
         return eid
@@ -317,11 +346,13 @@ def build_from_db(gb: GraphBuilder, days: int = 3650) -> None:
         patents = session.query(RawPatent).all()
         log.info("graph: %d patents", len(patents))
         for p in patents:
+            _d = p.grant_date or p.filing_date
             wid = gb.add_entity(
                 "WORK", f"{p.source_id}", subtype="patent",
                 description=(p.title or "")[:900],
                 source_doc=f"patent:{p.source}:{p.source_id}",
                 meta=(p.title or "")[:200],
+                event_date=_d.isoformat()[:10] if _d else "",
             )
             for a in (p.assignees or []):
                 oid = gb.add_entity("ORG", a.get("name", ""),
@@ -357,6 +388,11 @@ def build_from_db(gb: GraphBuilder, days: int = 3650) -> None:
                     description=(s.title or "")[:900],
                     source_doc=f"{s.source}:{s.source_id}",
                     meta=(s.url or "")[:300],
+                    event_date=(s.event_date.isoformat()[:10]
+                                if s.event_date else ""),
+                    quality=float((s.raw_payload or {}).get("quality_weight", 1.0)),
+                    valence=((s.raw_payload or {}).get("affect", {})
+                             .get("summary", {}).get("mean_valence")),
                 )
                 if s.organization:
                     oid = gb.add_entity("ORG", s.organization,

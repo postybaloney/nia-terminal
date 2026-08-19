@@ -71,11 +71,36 @@ class BaseIngestor(abc.ABC):
         ...
 
     def _safe_date(self, val: str | None) -> datetime | None:
+        """
+        Parse a date from any of the shapes the patent sources emit.
+
+        FIXED 2026-08-18. The previous version sliced the input with
+        `val[:len(fmt)]`, which is comparing a string length against the length
+        of a *format specifier* — two unrelated numbers. len("%Y%m%d") is 6
+        while the value it must match ("20200102") is 8 characters, and
+        len("%Y-%m-%d") is 8 while "2020-01-02" is 10. The result was that
+        EVERY format failed and EVERY patent date silently became None —
+        no exception, no log line, just an empty column.
+
+        EPO OPS returns compact YYYYMMDD, so this affected the entire patent
+        corpus: no filing dates, no grant dates, and a broken time series on
+        the dashboard. The signals base class never had this bug, which is why
+        only patent dates looked wrong.
+
+        Parse the whole string; never slice by format length.
+        """
         if not val:
             return None
-        for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+        s = str(val).strip()
+        if not s:
+            return None
+        # ISO datetimes -> keep the date part
+        if "T" in s:
+            s = s.split("T", 1)[0]
+        s = s.rstrip("Z")
+        for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y/%m/%d", "%Y-%m", "%Y%m", "%Y"):
             try:
-                return datetime.strptime(val[:len(fmt)], fmt)
+                return datetime.strptime(s, fmt)
             except (ValueError, TypeError):
                 continue
         return None

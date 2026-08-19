@@ -581,6 +581,50 @@ async def cmd_doctor(only: str | None = None) -> None:
         console.print("[green]All probed sources reachable.[/green]")
 
 
+def cmd_audit_gate(demo: bool = False) -> None:
+    """Check whether any relevance tier is acting as an uncertainty sink."""
+    import subprocess
+    import sys as _sys
+    cmd = [_sys.executable, "gate_audit.py"] + (["--demo"] if demo else [])
+    _sys.exit(subprocess.run(cmd).returncode)
+
+
+async def cmd_affect(limit: int = 200, force: bool = False) -> None:
+    """Extract entity-level affect for records that can carry a verdict."""
+    from affect import run_batch
+
+    console.print("[bold]Extracting entity affect...[/bold]")
+    st = await run_batch(limit=limit, force=force)
+
+    table = Table(title="Entity Affect Extraction")
+    table.add_column("Metric", style="dim")
+    table.add_column("Value", style="bold")
+    for k, label in (("considered", "Records considered"),
+                     ("gated_out", "  skipped by gate (no verdict possible)"),
+                     ("attempted", "LLM calls made"),
+                     ("ok", "  succeeded"),
+                     ("failed", "  failed"),
+                     ("entities", "Entities extracted"),
+                     ("ungrounded_dropped", "  dropped: evidence not in source")):
+        table.add_row(label, str(st.get(k, 0)))
+    console.print(table)
+
+
+def cmd_score(stance: str = "balanced", query: str = "", etype: str | None = None,
+              top: int = 25, explain: str = "", db: str = "nia_graph.sqlite") -> None:
+    """Rank entities by establishment / frontier rather than raw document count."""
+    import subprocess
+    import sys as _sys
+    cmd = [_sys.executable, "metrics.py", "--db", db, "--stance", stance, "--top", str(top)]
+    if query:
+        cmd += ["--query", query]
+    if etype:
+        cmd += ["--type", etype]
+    if explain:
+        cmd += ["--explain", explain]
+    _sys.exit(subprocess.run(cmd).returncode)
+
+
 def cmd_graph(demo: bool = False, out: str = "nia_graph.sqlite",
               html: str = "nia_graph.html", max_nodes: int = 650) -> None:
     """Build the knowledge graph and render the self-contained HTML view."""
@@ -635,6 +679,19 @@ def main() -> None:
     g_p.add_argument("--out", default="nia_graph.sqlite")
     g_p.add_argument("--html", default="nia_graph.html")
     g_p.add_argument("--max-nodes", type=int, default=650)
+    ag_p = sub.add_parser("audit-gate", help="Check relevance tiers for uncertainty sinks")
+    ag_p.add_argument("--demo", action="store_true")
+    af_p = sub.add_parser("affect", help="Extract entity-level sentiment/valence")
+    af_p.add_argument("--limit", type=int, default=200)
+    af_p.add_argument("--force", action="store_true", help="re-extract existing")
+    sc_p = sub.add_parser("score", help="Rank entities by establishment / frontier")
+    sc_p.add_argument("--stance", choices=["established", "frontier", "balanced"],
+                      default="balanced")
+    sc_p.add_argument("--query", default="", help="rank relative to a prompt")
+    sc_p.add_argument("--type", dest="etype", choices=["ORG", "TECH"], default=None)
+    sc_p.add_argument("--top", type=int, default=25)
+    sc_p.add_argument("--explain", default="", help="show one entity's components")
+    sc_p.add_argument("--db", default="nia_graph.sqlite")
     sub.add_parser("scheduler", help="Start cron scheduler (blocking)")
 
     args = parser.parse_args()
@@ -679,6 +736,13 @@ def main() -> None:
         asyncio.run(cmd_backfill_orcid(dry_run=getattr(args, "dry_run", False)))
     elif args.command == "doctor":
         asyncio.run(cmd_doctor(getattr(args, "only", None)))
+    elif args.command == "audit-gate":
+        cmd_audit_gate(demo=getattr(args, "demo", False))
+    elif args.command == "affect":
+        asyncio.run(cmd_affect(limit=args.limit, force=getattr(args, "force", False)))
+    elif args.command == "score":
+        cmd_score(stance=args.stance, query=args.query, etype=args.etype,
+                  top=args.top, explain=args.explain, db=args.db)
     elif args.command == "graph":
         cmd_graph(demo=getattr(args, "demo", False), out=args.out,
                   html=args.html, max_nodes=getattr(args, "max_nodes", 650))

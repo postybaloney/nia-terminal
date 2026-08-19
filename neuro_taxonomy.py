@@ -95,7 +95,11 @@ ADJACENT_NEURO_CPC: tuple[str, ...] = (
                      #  resonance, e.g. magnetic resonance imaging"  -> fMRI
     "A61B5/0059",    # "using light, e.g. diagnosis by transillumination,
                      #  diascopy, fluorescence"  -> fNIRS / optical brain imaging
-    "A61B5/1455",    # optical sensors, spectrophotometric oximeters
+    # A61B5/1455 (optical sensors / spectrophotometric oximeters) was added on
+    # 2026-08-18 and REMOVED the same day: it is pulse oximetry, which sits in
+    # every smartwatch and smart ring, and it pulled consumer-electronics
+    # mega-filers (Samsung, LG, Qualcomm) into the corpus. fNIRS is already
+    # carried by A61B5/0059 plus the phrase list, so nothing is lost.
 )
 
 # Hard exclusions — the actual source of the Roborock/Cilag contamination.
@@ -180,6 +184,35 @@ CORE_PHRASES: tuple[str, ...] = (
     "millimeter wave radar", "radar vital sign", "contactless vital sign",
     "eye tracking neural", "pupillometry",
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Broad phrases
+# ─────────────────────────────────────────────────────────────────────────────
+# These are real neurotech terms, but generic enough that they also appear in
+# cardiac stimulation, muscle stimulation, general bioelectronics and device
+# marketing. They score HALF, so one of them alone is not enough to admit a
+# record.
+#
+# Added 2026-08-19 after a gate audit (gate_audit.py) borrowed from the MSN
+# classifier work, which found the `news` class in an 11-way article classifier
+# was acting as an "uncertainty sink". NIA's `adjacent` tier had the same
+# structural problem: a title phrase scored +2, the accept threshold was 2, so
+# ANY record with one phrase and nothing else landed in `adjacent` — 100% of
+# them at the boundary, 100% on a single signal, 100% with no classification
+# support. That is not a category, it is a shrug.
+#
+# The fix is specificity-weighting rather than a higher threshold: "deep brain
+# stimulation" alone genuinely is neurotech and should still be admitted;
+# "neuromodulation accessory" alone should not.
+BROAD_PHRASES: frozenset = frozenset({
+    "neuromodulation", "neurostimulation", "neurostimulator",
+    "brain stimulation", "neural signal", "neural interface", "neural implant",
+    "action potential", "neuronal activity", "peripheral nerve", "cranial nerve",
+    "nerve stimulation", "electrode array", "neural recording", "neural circuit",
+    "electromyography", "myoelectric", "bioelectronic medicine",
+    "autonomic modulation", "evoked potential", "cortical stimulation",
+})
+
 
 # Words that make "neural"/"network" mean the ML sense rather than the
 # biological one. Used only to break ties, never as a sole rejection.
@@ -391,12 +424,24 @@ def score_record(
     if adj_cpc:
         r.score += 1
         r.reasons.append(f"adjacent CPC {adj_cpc[0]}")
+    # Specific phrases carry full weight; broad ones carry half, so a single
+    # generic mention cannot clear the accept threshold on its own.
     if title_hits:
-        r.score += 2
-        r.reasons.append(f"title phrase '{title_hits[0]}'")
+        specific = [h for h in title_hits if h not in BROAD_PHRASES]
+        if specific:
+            r.score += 2
+            r.reasons.append(f"title phrase '{specific[0]}'")
+        else:
+            r.score += 1
+            r.reasons.append(f"broad title phrase '{title_hits[0]}'")
     if abs_hits:
-        r.score += 2
-        r.reasons.append(f"abstract phrase '{abs_hits[0]}'")
+        specific = [h for h in abs_hits if h not in BROAD_PHRASES]
+        if specific:
+            r.score += 2
+            r.reasons.append(f"abstract phrase '{specific[0]}'")
+        else:
+            r.score += 1
+            r.reasons.append(f"broad abstract phrase '{abs_hits[0]}'")
 
     # ── Penalties ────────────────────────────────────────────────────────────
     blob = f"{title} {abstract}".lower()
@@ -535,3 +580,37 @@ def classify_tech(title: str | None, abstract: str | None) -> list[str]:
         if any(m in blob for m in markers):
             out.append(concept)
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anatomical anchors
+# ─────────────────────────────────────────────────────────────────────────────
+# Where each technology actually acts, in normalised sagittal-view coordinates
+# (0-1, x = anterior->posterior, y = superior->inferior; the head faces LEFT).
+#
+# This exists so the knowledge graph can lay technologies out on a brain rather
+# than wherever a force simulation happens to fling them. Position then carries
+# information — a reader who knows neuroanatomy can find DBS without reading a
+# label, and someone who doesn't learns the anatomy from the layout. A brain
+# drawn behind a random layout would be decoration; this is not that.
+#
+# `depth` distinguishes surface/cortical work from deep targets, and `label`
+# names the structure so the UI can say WHY a node sits where it does.
+TECH_ANATOMY: dict[str, dict] = {
+    "Brain-Computer Interface":     {"x": 0.42, "y": 0.20, "region": "motor cortex", "depth": "surface"},
+    "Neuroprosthetics":             {"x": 0.34, "y": 0.24, "region": "premotor cortex", "depth": "surface"},
+    "Neural Recording Hardware":    {"x": 0.53, "y": 0.24, "region": "somatosensory cortex", "depth": "surface"},
+    "EEG & Seizure":                {"x": 0.46, "y": 0.035, "region": "scalp / whole cortex", "depth": "external"},
+    "Non-invasive Stimulation":     {"x": 0.23, "y": 0.31, "region": "dorsolateral prefrontal", "depth": "external"},
+    "Silent Speech & Facial Sensing": {"x": 0.25, "y": 0.58, "region": "inferior frontal / face motor", "depth": "external"},
+    "Deep Brain Stimulation":       {"x": 0.47, "y": 0.51, "region": "basal ganglia / STN", "depth": "deep"},
+    "Closed-Loop Neuromodulation":  {"x": 0.57, "y": 0.46, "region": "thalamus", "depth": "deep"},
+    "Focused Ultrasound":           {"x": 0.63, "y": 0.36, "region": "deep, transcranial", "depth": "deep"},
+    "Optogenetics":                 {"x": 0.66, "y": 0.58, "region": "hippocampus / circuits", "depth": "deep"},
+    "Functional Neuroimaging":      {"x": 0.36, "y": 0.40, "region": "whole brain", "depth": "external"},
+    "Cochlear & Auditory":          {"x": 0.47, "y": 0.685, "region": "superior temporal / cochlea", "depth": "peripheral"},
+    "Retinal & Visual":             {"x": 0.805, "y": 0.455, "region": "occipital / retina", "depth": "peripheral"},
+    "Vagus Nerve Stimulation":      {"x": 0.640, "y": 0.74, "region": "brainstem / vagus", "depth": "peripheral"},
+    "Spinal Cord Stimulation":      {"x": 0.652, "y": 0.90, "region": "spinal cord", "depth": "peripheral"},
+    "Contactless Sensing":          {"x": 0.12, "y": 0.76, "region": "off-body", "depth": "external"},
+}
