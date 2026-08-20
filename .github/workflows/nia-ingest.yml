@@ -41,6 +41,15 @@ jobs:
       # was missing entirely, so setting the LLM_MODEL secret had no effect at
       # all — the variable never reached the job.
       LLM_MODEL:         ${{ secrets.LLM_MODEL }}
+      # Both optional. An unset secret arrives as "" and config.py's
+      # _treat_empty_env_as_unset drops it class-wide, so the field default
+      # applies — that guard is what makes it safe to list them here at all.
+      # AFFECT_MODEL empty  = affect uses the same model as everything else.
+      # Set it to give the affect pass its own budget (Groq limits are
+      # per-model), e.g. openai/gpt-oss-20b.
+      AFFECT_MODEL:          ${{ secrets.AFFECT_MODEL }}
+      # Tokens/minute the affect pass paces itself against. 8000 = Groq free.
+      LLM_TOKENS_PER_MINUTE: ${{ secrets.LLM_TOKENS_PER_MINUTE }}
       GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
       OPENFDA_API_KEY:   ${{ secrets.OPENFDA_API_KEY }}    # optional
       EPO_CLIENT_ID:     ${{ secrets.EPO_CLIENT_ID }}      # optional

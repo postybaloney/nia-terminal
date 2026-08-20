@@ -55,3 +55,11 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+# site/ is regenerated from scratch by build_site.py on every run, and the
+# nightly workflow publishes it via upload-pages-artifact from the freshly
+# built directory — NOT from git. Committing it therefore changes nothing that
+# gets deployed, while producing a four-file diff on every local build.
+# Untrack it once with:  git rm -r --cached site/
+site/

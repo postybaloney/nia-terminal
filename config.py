@@ -30,6 +30,20 @@ class Settings(BaseSettings):
     # 404 on every call. analysis._RETIRED_MODELS also remaps known-dead names.
     llm_model: str = ""
 
+    # Tokens-per-minute budget for the configured backend, used to pace batch
+    # jobs so they fit the limit instead of firing into 429s and retrying.
+    # Groq's free tier is 8,000 TPM per model. Raise it if you upgrade.
+    llm_tokens_per_minute: int = 8000
+
+    # Optional model override for the bulk entity-affect pass. EMPTY means
+    # "use the same model as everything else" — the safe default, because
+    # silently downgrading extraction quality is not something a config file
+    # should decide on its own. Set it only if you want affect on a separate
+    # model: Groq rate limits are PER MODEL, so e.g. AFFECT_MODEL=
+    # openai/gpt-oss-20b gives the affect pass its own 8k TPM budget instead
+    # of sharing one with the digests.
+    affect_model: str = ""
+
     # API keys — only the one matching LLM_BACKEND is required
     groq_api_key: str = ""
     gemini_api_key: str = ""

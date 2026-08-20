@@ -243,7 +243,10 @@ def build_prompt(title: str | None, body: str | None, max_entities: int = 5) -> 
         f"{json.dumps({'entities': ex['entities']}, indent=2)}"
         for ex in _FEWSHOT
     )
-    article = f"{title or ''}. {body or ''}".strip()[:2400]
+    # 1,500 chars, not 2,400. Valenced statements ("received approval", "missed
+    # its primary endpoint", "issued a recall") appear early — trailing
+    # boilerplate costs rate-limit budget and adds nothing.
+    article = f"{title or ''}. {body or ''}".strip()[:1500]
     return f"""Task: extract_entities_and_affect
 
 Extract at most {max_entities} neurotech-relevant entities from the article.
@@ -364,6 +367,22 @@ def verify_grounding(result: AffectResult, title: str | None,
     return result
 
 
+def _affect_model() -> str | None:
+    """
+    Optional per-pass model override (AFFECT_MODEL).
+
+    Imported lazily, and failure-tolerant, because affect.py is deliberately
+    usable without a config or .env present — the parser, the grounding
+    verifier and --selftest all run offline. A missing config must degrade to
+    "no override", never to an ImportError at extraction time.
+    """
+    try:
+        from config import settings
+        return (settings.affect_model or "").strip() or None
+    except Exception:
+        return None
+
+
 async def extract(title: str | None, body: str | None,
                   max_entities: int = 5) -> AffectResult:
     """
@@ -379,8 +398,13 @@ async def extract(title: str | None, body: str | None,
     except Exception as exc:
         return AffectResult(ok=False, error=f"LLM unavailable: {exc}")
     try:
+        # 500, not 900. max_tokens is charged against the rate limit as
+        # REQUESTED tokens whether or not they are used — Groq's 429 says
+        # "Requested 2342" — so an oversized budget throttles throughput
+        # directly. Five entities cost roughly 350 tokens; 500 is ample.
         raw = await _llm(_SYSTEM, build_prompt(title, body, max_entities),
-                         max_tokens=900, schema=AFFECT_SCHEMA)
+                         max_tokens=500, schema=AFFECT_SCHEMA,
+                         model=_affect_model())
     except FatalLLMError:
         raise
     except Exception as exc:
@@ -410,8 +434,13 @@ async def preflight() -> tuple[bool, str]:
     # failed validation. Schema problems are per-record and degrade gracefully;
     # only reachability should be able to stop a whole batch.
     try:
+        # Same model the extraction pass will use, or the probe is worthless:
+        # a bad AFFECT_MODEL would sail past a preflight that tested the
+        # default model and then 404 once per record — precisely the incident
+        # this function exists to prevent.
         await _llm("You reply with JSON only.",
-                   'Reply with {"ok": true}', max_tokens=256)
+                   'Reply with {"ok": true}', max_tokens=256,
+                   model=_affect_model())
         return True, ""
     except FatalLLMError as exc:
         return False, str(exc)
@@ -531,6 +560,7 @@ async def run_batch(limit: int = 200, force: bool = False) -> dict:
     import asyncio
     import logging
 
+    from config import settings
     from db import get_session
     from db.signal_models import Signal
 
@@ -561,6 +591,18 @@ async def run_batch(limit: int = 200, force: bool = False) -> dict:
             work.append((r.id, r.title, r.summary))
             if len(work) >= limit:
                 break
+
+    # Pace against the token budget rather than firing and absorbing 429s.
+    # Every rejected request is a wasted round trip that still counts toward the
+    # limit; spacing calls to fit the budget finishes sooner AND leaves a log
+    # you can read. Estimated per-call cost is ~500 output + ~400 prompt.
+    tpm = getattr(settings, "llm_tokens_per_minute", 0) or 8000
+    per_call = 950
+    spacing = max(0.0, 60.0 / max(tpm / per_call, 0.5))
+    if spacing > 0.5:
+        log.info("affect: pacing %.1fs between calls "
+                 "(~%d TPM budget, ~%d tokens/call, ~%.1f calls/min)",
+                 spacing, tpm, per_call, 60.0 / spacing)
 
     # Circuit breaker. Even past preflight a backend can fail mid-run — a key
     # revoked, a rate limit that never clears. Repeating the same error for the
@@ -608,6 +650,6 @@ async def run_batch(limit: int = 200, force: bool = False) -> dict:
                     ],
                 }
                 row.raw_payload = rp
-        await asyncio.sleep(0.2)     # be polite to the backend
+        await asyncio.sleep(spacing)
 
     return stats

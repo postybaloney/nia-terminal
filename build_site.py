@@ -103,17 +103,23 @@ def main() -> int:
     demo = ["--demo"] if a.demo else []
     ok: dict[str, bool] = {}
 
-    # 1 · dashboard
-    ok["index.html"] = run("dashboard snapshot", [
-        py, "build_snapshot.py", "--out", os.path.join(a.out, "index.html"), *demo])
-
-    # 2 · knowledge graph
+    # 1 · knowledge graph — FIRST, because everything downstream reads it.
+    #     The dashboard's scored leaderboard and affect layer come out of this
+    #     SQLite file; building the dashboard before the graph (the original
+    #     order) meant those cards could only ever render "not available".
     gdb = os.path.join(a.out, "nia_graph.sqlite")
     built = run("knowledge graph (build)", [py, "graph_build.py", "--out", gdb, *demo])
     ok["graph.html"] = built and run("knowledge graph (render)", [
         py, "graph_render.py", "--db", gdb,
         "--out", os.path.join(a.out, "graph.html"),
         "--max-nodes", str(a.max_nodes)])
+
+    # 2 · dashboard — reads the graph for establishment/frontier/affect.
+    #     --graph is passed even when the build failed: build_snapshot degrades
+    #     to an explicit "not available" note, which is the correct output.
+    ok["index.html"] = run("dashboard snapshot", [
+        py, "build_snapshot.py", "--out", os.path.join(a.out, "index.html"),
+        "--graph", gdb, *demo])
 
     # 3 · intelligence layer issue
     ok["issue.html"] = run("intelligence layer issue", [

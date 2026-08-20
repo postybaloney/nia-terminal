@@ -19,6 +19,7 @@ construction — see the dataviz palette validator).
 from __future__ import annotations
 
 import argparse
+import os
 import html
 import sys
 from collections import Counter
@@ -320,6 +321,77 @@ def demo_data() -> dict:
 #  SVG CHARTS  (single-hue, direct-labelled → colourblind-safe by construction)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def load_scored(graph_path: str | None) -> dict:
+    """
+    Rank entities by the two-axis metric instead of by volume.
+
+    The dashboard used to show TOP ASSIGNEES ALL TIME — a raw Counter over
+    patent assignees. That is precisely the metric metrics.py exists to
+    replace: it rewards age and portfolio size, so it will show Medtronic
+    every night forever and never show the lab that just did something
+    unusual. This reads the graph the build already produces and returns the
+    scored view alongside it, so the page can show BOTH and let the contrast
+    make the argument.
+
+    Returns {} when the graph is unavailable. That is deliberate: the caller
+    renders an honest "not built" note rather than a stale or invented table,
+    matching how build_site.py handles a failed page.
+    """
+    if not graph_path or not os.path.exists(graph_path):
+        return {"available": False, "reason": "graph database not built"}
+    try:
+        import sqlite3 as _sq
+        from metrics import Scorer, rank
+    except Exception as exc:
+        return {"available": False, "reason": f"metrics unavailable ({exc})"}
+    try:
+        conn = _sq.connect(graph_path)
+        scores = Scorer(conn).compute()
+    except Exception as exc:
+        return {"available": False, "reason": f"scoring failed ({exc})"}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if not scores:
+        return {"available": False, "reason": "graph has no scorable entities"}
+
+    def _rows(stance, n=8, etype=None):
+        return [{
+            "name": r["name"],
+            "type": r["type"],
+            "est": round(r["establishment"], 1),
+            "fro": round(r["frontier"], 1),
+            "works": r["n_works"],
+            "layers": len(r["layers"]),
+            "valence": r.get("valence"),
+            "n_valenced": r.get("n_valenced", 0),
+        } for _, _, r in rank(scores, stance=stance, etype=etype, top=n)]
+
+    # Affect is reported only where it was actually extracted. An entity with
+    # no valenced evidence is not neutral — it is unmeasured, and showing it as
+    # 0.0 would manufacture a reading the corpus does not support.
+    valenced = [r for r in scores.values()
+                if r.get("valence") is not None and r.get("n_valenced", 0) > 0]
+    valenced.sort(key=lambda r: (-abs(r["valence"]), -r["n_valenced"]))
+    affect_rows = [{
+        "name": r["name"], "type": r["type"],
+        "valence": round(r["valence"], 2), "n": r["n_valenced"],
+    } for r in valenced[:10]]
+
+    return {
+        "available": True,
+        "balanced": _rows("balanced"),
+        "established": _rows("established"),
+        "frontier": _rows("frontier"),
+        "affect": affect_rows,
+        "n_scored": len(scores),
+        "n_valenced": len(valenced),
+    }
+
+
 def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
@@ -414,6 +486,92 @@ def _table(headers: list[str], rows: list[list], aligns: list[str] | None = None
     return f'<table><thead><tr>{thead}</tr></thead><tbody>{"".join(body)}</tbody></table>'
 
 
+def _bar(pct: float, colour: str, width: int = 54) -> str:
+    """Inline score bar. Percentile scores are 0-100, so no rescaling."""
+    w = max(0.0, min(100.0, float(pct)))
+    return (f'<span style="display:inline-block;width:{width}px;height:6px;'
+            f'background:{CARD2};border-radius:3px;vertical-align:middle;'
+            f'margin-right:7px;overflow:hidden">'
+            f'<span style="display:block;width:{w:.0f}%;height:100%;'
+            f'background:{colour}"></span></span>')
+
+
+def _valence_chip(v: float | None, n: int = 0) -> str:
+    """
+    Colour by direction, opacity by evidence count.
+
+    None renders as an em dash, never as a neutral zero — "we did not measure
+    this" and "we measured this and it was neutral" are different claims and
+    the page must not conflate them.
+    """
+    if v is None:
+        return f'<span style="color:{DIM}">&mdash;</span>'
+    colour = GREEN if v > 0.15 else (RED if v < -0.15 else DIM)
+    sign = "+" if v > 0 else ""
+    return (f'<span style="color:{colour};font-weight:700">{sign}{v:.2f}</span>'
+            f'<span style="color:{DIM};font-size:9px"> &middot;{n}</span>')
+
+
+def _unavailable(reason: str) -> str:
+    return (f'<div class="empty" style="font-size:12px">'
+            f'Not available &mdash; {_esc(reason)}.<br>'
+            f'<span style="font-size:10px">Nothing is shown here rather than '
+            f'showing stale or invented figures.</span></div>')
+
+
+def _scored_card(sc: dict) -> str:
+    if not sc.get("available"):
+        return _unavailable(sc.get("reason", "unknown"))
+    head = ('<tr><th style="text-align:left">Entity</th><th>Type</th>'
+            '<th style="text-align:left">Established</th>'
+            '<th style="text-align:left">Frontier</th>'
+            '<th style="text-align:right">Evidence</th>'
+            '<th style="text-align:right">Layers</th></tr>')
+    body = []
+    for r in sc["balanced"]:
+        body.append(
+            f'<tr><td>{_esc(r["name"])}</td>'
+            f'<td style="color:{DIM}">{_esc(r["type"])}</td>'
+            f'<td>{_bar(r["est"], TEAL)}<span style="font-size:10px">{r["est"]:.0f}</span></td>'
+            f'<td>{_bar(r["fro"], PURPLE)}<span style="font-size:10px">{r["fro"]:.0f}</span></td>'
+            f'<td style="text-align:right">{r["works"]}</td>'
+            f'<td style="text-align:right">{r["layers"]}</td></tr>')
+    note = (f'<div style="color:{DIM};font-size:10px;margin-top:10px;line-height:1.6">'
+            f'Percentile within a (first-seen year &times; entity type) cohort, so a '
+            f'2026 entrant and a 2014 incumbent are judged against their own peers '
+            f'&mdash; neither age nor portfolio size moves these scores. '
+            f'<b style="color:{TEAL}">ESTABLISHED</b> = corroboration across '
+            f'independent source systems &times; momentum. '
+            f'<b style="color:{PURPLE}">FRONTIER</b> = atypical technology pairings '
+            f'&times; structural brokerage &times; stage gap. '
+            f'Ranked on the geometric mean, so leading requires both. '
+            f'{sc["n_scored"]:,} entities scored.</div>')
+    return f'<table>{head}{"".join(body)}</table>{note}'
+
+
+def _affect_card(sc: dict) -> str:
+    if not sc.get("available"):
+        return _unavailable(sc.get("reason", "unknown"))
+    if not sc.get("affect"):
+        return _unavailable("no entity affect extracted yet — run `main.py affect`")
+    head = ('<tr><th style="text-align:left">Entity</th><th>Type</th>'
+            '<th style="text-align:right">Valence</th></tr>')
+    body = "".join(
+        f'<tr><td>{_esc(r["name"])}</td>'
+        f'<td style="color:{DIM}">{_esc(r["type"])}</td>'
+        f'<td style="text-align:right">{_valence_chip(r["valence"], r["n"])}</td></tr>'
+        for r in sc["affect"])
+    note = (f'<div style="color:{DIM};font-size:10px;margin-top:10px;line-height:1.6">'
+            f'Direction of the evidence, extracted per entity from news and job '
+            f'signals and kept out of the scores above &mdash; a recall still '
+            f'proves a company is shipping, so folding it into ESTABLISHED would '
+            f'double-count the event and hide its sign. Every reading is backed by '
+            f'a quoted span verified to appear in the source document; '
+            f'unverifiable ones are dropped. {sc["n_valenced"]:,} entities carry a '
+            f'reading. The dot-number is how many documents contributed.</div>')
+    return f'<table>{head}{body}</table>{note}'
+
+
 def _card(title: str, accent: str, inner: str) -> str:
     return f"""    <section class="card">
       <div class="card-hd"><span class="dot" style="background:{accent}"></span>{_esc(title)}</div>
@@ -423,6 +581,7 @@ def _card(title: str, accent: str, inner: str) -> str:
 
 def render_html(d: dict) -> str:
     k = d["kpis"]
+    sc = d.get("scored") or {"available": False, "reason": "graph not supplied"}
     status_color = GREEN if d.get("last_run_ok") else RED
     status_word = "OPERATIONAL" if d.get("last_run_ok") else "CHECK LOGS"
 
@@ -498,10 +657,13 @@ def render_html(d: dict) -> str:
 
   <div class="grid">
 {_card("NEW PATENT RECORDS · LAST 14 DAYS", AMBER, svg_vbars(d['series_new_patents']))}
-{_card("TOP ASSIGNEES · ALL TIME", TEAL, svg_hbars(d['top_assignees']))}
+{_card("MOST PROLIFIC ASSIGNEES · BY VOLUME", TEAL, svg_hbars(d['top_assignees']))}
 {_card("CURRENT SIGNALS BY TYPE", PURPLE, svg_hbars(d['signals_by_type']))}
 {_card("PhD THESES BY YEAR", BLUE, svg_hbars(d['theses_by_year']))}
   </div>
+
+{_card("SIGNAL LEADERBOARD · ESTABLISHED vs FRONTIER", TEAL, _scored_card(sc))}
+{_card("ENTITY AFFECT · DIRECTION OF THE EVIDENCE", GREEN, _affect_card(sc))}
 
 {_card("LATEST PATENTS", AMBER, _table(["Date","Source","ID","Title","Assignee"], patents_rows))}
 {_card("LATEST SIGNALS", PURPLE, _table(["Date","Type","Organization","Title","Amount"], signals_rows, ["left","left","left","left","right"]))}
@@ -522,9 +684,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Build the static NIA terminal snapshot.")
     ap.add_argument("--out", default="site/index.html", help="output HTML path")
     ap.add_argument("--demo", action="store_true", help="use mock data (no DB needed)")
+    ap.add_argument("--graph", default="", help=(
+        "path to nia_graph.sqlite; enables the scored leaderboard and the "
+        "affect layer. Omitted or missing, those cards say so rather than "
+        "falling back to volume counts dressed up as a ranking."))
     args = ap.parse_args()
 
     data = demo_data() if args.demo else fetch_from_db()
+    data["scored"] = load_scored(args.graph)
+    if not data["scored"].get("available"):
+        print(f"[snapshot] scored view unavailable: "
+              f"{data['scored'].get('reason')}")
     htmldoc = render_html(data)
 
     import os

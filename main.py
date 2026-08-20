@@ -629,8 +629,21 @@ async def cmd_affect(limit: int = 200, force: bool = False) -> None:
 def cmd_score(stance: str = "balanced", query: str = "", etype: str | None = None,
               top: int = 25, explain: str = "", db: str = "nia_graph.sqlite") -> None:
     """Rank entities by establishment / frontier rather than raw document count."""
+    import os
     import subprocess
     import sys as _sys
+
+    # sqlite3.connect() CREATES a missing file, so without this guard a typo or
+    # a forgotten `graph` step produces an empty database and a confident empty
+    # ranking rather than an error. build_site.py builds its own copy under
+    # site/ and deletes it afterwards, so "I just built the site" does not
+    # leave a scorable graph behind.
+    if not os.path.exists(db):
+        console.print(f"[red]No graph database at {db}[/red]")
+        console.print("[yellow]Run `python main.py graph` first — "
+                      "build_site.py deletes its own copy as a build "
+                      "artifact.[/yellow]")
+        _sys.exit(1)
     cmd = [_sys.executable, "metrics.py", "--db", db, "--stance", stance, "--top", str(top)]
     if query:
         cmd += ["--query", query]

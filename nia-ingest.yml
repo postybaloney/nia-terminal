@@ -35,6 +35,21 @@ jobs:
       # --- set these in GitHub → repo Settings → Secrets and variables → Actions ---
       DATABASE_URL:      ${{ secrets.DATABASE_URL }}       # Neon connection string (postgresql://...sslmode=require)
       LLM_BACKEND:       ${{ secrets.LLM_BACKEND }}        # e.g. groq
+      # Optional override. LEAVE THE SECRET UNSET unless you have a reason:
+      # empty means "let the backend pick its own current default", which is
+      # what survives a provider retiring a model. Until 2026-08-19 this line
+      # was missing entirely, so setting the LLM_MODEL secret had no effect at
+      # all — the variable never reached the job.
+      LLM_MODEL:         ${{ secrets.LLM_MODEL }}
+      # Both optional. An unset secret arrives as "" and config.py's
+      # _treat_empty_env_as_unset drops it class-wide, so the field default
+      # applies — that guard is what makes it safe to list them here at all.
+      # AFFECT_MODEL empty  = affect uses the same model as everything else.
+      # Set it to give the affect pass its own budget (Groq limits are
+      # per-model), e.g. openai/gpt-oss-20b.
+      AFFECT_MODEL:          ${{ secrets.AFFECT_MODEL }}
+      # Tokens/minute the affect pass paces itself against. 8000 = Groq free.
+      LLM_TOKENS_PER_MINUTE: ${{ secrets.LLM_TOKENS_PER_MINUTE }}
       GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
       OPENFDA_API_KEY:   ${{ secrets.OPENFDA_API_KEY }}    # optional
       EPO_CLIENT_ID:     ${{ secrets.EPO_CLIENT_ID }}      # optional
@@ -84,6 +99,16 @@ jobs:
       # and the current Intelligence Layer issue — and degrades gracefully: a
       # generator that fails leaves a placeholder page saying so, rather than a
       # broken link or, worse, stale data presented as current.
+      # Affect must run BEFORE the site build: build_site.py rebuilds the graph,
+      # and graph_build reads each signal's stored affect to carry valence onto
+      # its node. Run it afterwards and the deployed graph has no sentiment in
+      # it at all. Capped per night so LLM cost stays bounded; the pass is
+      # resumable, so any backlog drains over successive runs.
+      - name: Extract entity affect (bounded, resumable)
+        if: always()
+        continue-on-error: true
+        run: python main.py affect --limit 100
+
       - name: Build static site (dashboard + graph + issue)
         if: always()
         run: python build_site.py --out site --days 30

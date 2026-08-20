@@ -153,7 +153,7 @@ def _resolve_model(configured: str | None, default: str) -> str:
 
 
 async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
-                     schema: dict | None = None) -> str:
+                     schema: dict | None = None, model: str | None = None) -> str:
     """
     Groq Cloud — FREE tier, no credit card.
     Models: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768
@@ -161,7 +161,7 @@ async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
     """
     from groq import AsyncGroq
     client = AsyncGroq(api_key=settings.groq_api_key)
-    model = _resolve_model(settings.llm_model, "openai/gpt-oss-120b")
+    model = _resolve_model(model or settings.llm_model, "openai/gpt-oss-120b")
     kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
@@ -213,7 +213,8 @@ async def _call_groq(system: str, prompt: str, max_tokens: int = 2000,
     return response.choices[0].message.content
 
 
-async def _call_gemini(system: str, prompt: str, max_tokens: int = 2000) -> str:
+async def _call_gemini(system: str, prompt: str, max_tokens: int = 2000,
+                       model: str | None = None) -> str:
     """
     Google Gemini — FREE tier via AI Studio.
     Models: gemini-2.0-flash, gemini-1.5-flash
@@ -222,7 +223,7 @@ async def _call_gemini(system: str, prompt: str, max_tokens: int = 2000) -> str:
     import google.generativeai as genai
     genai.configure(api_key=settings.gemini_api_key)
     model = genai.GenerativeModel(
-        model_name=settings.llm_model or "gemini-2.0-flash",
+        model_name=model or settings.llm_model or "gemini-2.0-flash",
         system_instruction=system,
     )
     # Gemini's async generate
@@ -234,7 +235,7 @@ async def _call_gemini(system: str, prompt: str, max_tokens: int = 2000) -> str:
 
 
 async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000,
-                       schema: dict | None = None) -> str:
+                       schema: dict | None = None, model: str | None = None) -> str:
     """
     Ollama — 100% local, FREE, no account needed.
     Install: https://ollama.com
@@ -244,7 +245,7 @@ async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000,
     Other good choices: mistral, phi4, qwen2.5
     """
     import ollama
-    model = _resolve_model(settings.llm_model, "gemma4:12b")
+    model = _resolve_model(model or settings.llm_model, "gemma4:12b")
     kwargs: dict = {
         "model": model,
         "messages": [
@@ -273,7 +274,8 @@ async def _call_ollama(system: str, prompt: str, max_tokens: int = 2000,
     return response["message"]["content"]
 
 
-async def _call_huggingface(system: str, prompt: str, max_tokens: int = 2000) -> str:
+async def _call_huggingface(system: str, prompt: str, max_tokens: int = 2000,
+                            model: str | None = None) -> str:
     """
     Hugging Face Inference API — FREE tier, but slow and rate-limited.
     Get a token: huggingface.co/settings/tokens (read access is free)
@@ -281,7 +283,7 @@ async def _call_huggingface(system: str, prompt: str, max_tokens: int = 2000) ->
     Better free alternatives on HF: microsoft/Phi-3.5-mini-instruct
     """
     import httpx
-    model = settings.llm_model or "mistralai/Mistral-7B-Instruct-v0.3"
+    model = model or settings.llm_model or "mistralai/Mistral-7B-Instruct-v0.3"
     url = f"https://api-inference.huggingface.co/models/{model}"
     full_prompt = f"[INST] <<SYS>>\n{system}\n<</SYS>>\n\n{prompt} [/INST]"
     headers = {"Authorization": f"Bearer {settings.huggingface_token}"}
@@ -298,12 +300,13 @@ async def _call_huggingface(system: str, prompt: str, max_tokens: int = 2000) ->
         return str(data)
 
 
-async def _call_anthropic(system: str, prompt: str, max_tokens: int = 2000) -> str:
+async def _call_anthropic(system: str, prompt: str, max_tokens: int = 2000,
+                          model: str | None = None) -> str:
     """Anthropic Claude — paid API."""
     import anthropic as ant
     client = ant.AsyncAnthropic(api_key=settings.anthropic_api_key)
     message = await client.messages.create(
-        model=settings.llm_model or "claude-sonnet-4-20250514",
+        model=model or settings.llm_model or "claude-sonnet-4-20250514",
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": prompt}],
@@ -312,13 +315,13 @@ async def _call_anthropic(system: str, prompt: str, max_tokens: int = 2000) -> s
 
 
 async def _llm(system: str, prompt: str, max_tokens: int = 2000,
-               schema: dict | None = None) -> str:
+               schema: dict | None = None, model: str | None = None) -> str:
     """
     Route to the configured backend. Set LLM_BACKEND in .env.
     Defaults to groq if not set.
     """
     backend = (settings.llm_backend or "groq").lower()
-    raw = (settings.llm_model or "").strip()
+    raw = (model or settings.llm_model or "").strip()
     # Report the source AFTER normalisation. The previous version reported the
     # raw value, so a secret set to '' logged "LLM_MODEL env (2 chars)" even
     # though the quotes had been stripped and the default was actually used —
@@ -350,8 +353,8 @@ async def _llm(system: str, prompt: str, max_tokens: int = 2000,
     # Only the backends that actually enforce a schema receive one; the rest
     # would reject the unexpected keyword.
     if schema and backend in ("groq", "ollama"):
-        return await fn(system, prompt, max_tokens, schema=schema)
-    return await fn(system, prompt, max_tokens)
+        return await fn(system, prompt, max_tokens, schema=schema, model=model)
+    return await fn(system, prompt, max_tokens, model=model)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
