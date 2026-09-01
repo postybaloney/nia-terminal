@@ -70,6 +70,8 @@ Note your `robots.txt` already blocks GPTBot, ClaudeBot, Google-Extended, CCBot,
 python test_relevance.py        # 10 cases from real records that once fooled the gate
 python metrics.py --selftest    # proves the score is not explained by age
 python affect.py --selftest     # parser, grounding check, aggregation
+python sourcelinks.py           # URL construction + the scheme allow-list
+python test_links.py            # XSS regression: hostile feed data -> inert text
 python gate_audit.py --demo     # uncertainty-sink check
 ```
 

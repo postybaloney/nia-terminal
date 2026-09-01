@@ -1,0 +1,516 @@
+<title>NIA Terminal Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --ground:#F6F7F9; --surface:#FFFFFF; --surface-2:#EFF2F5;
+  --ink:#171A1F; --ink-soft:#59616D; --ink-faint:#8A929E;
+  --rule:#DFE4EA; --rule-soft:#EAEEF2;
+  --accent:#2F5D62; --accent-soft:#E3EDEC;
+  --sev-1:#B3261E; --sev-2:#C2610A; --sev-3:#7A6514; --sev-4:#3F6B52;
+  --sev-1-bg:#FBEBEA; --sev-2-bg:#FCF0E4; --sev-3-bg:#F8F3E0; --sev-4-bg:#E9F1EC;
+  --shadow:0 1px 2px rgba(23,26,31,.05), 0 8px 24px -12px rgba(23,26,31,.12);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#101317; --surface:#171B21; --surface-2:#1E242C;
+    --ink:#E6E9EE; --ink-soft:#A2ABB8; --ink-faint:#767F8C;
+    --rule:#2A313A; --rule-soft:#212832;
+    --accent:#7FB3B0; --accent-soft:#1B2C2E;
+    --sev-1:#F08A80; --sev-2:#E8A45C; --sev-3:#CBB264; --sev-4:#7FBE9A;
+    --sev-1-bg:#2C1917; --sev-2-bg:#2B1F13; --sev-3-bg:#272317; --sev-4-bg:#182620;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101317; --surface:#171B21; --surface-2:#1E242C;
+  --ink:#E6E9EE; --ink-soft:#A2ABB8; --ink-faint:#767F8C;
+  --rule:#2A313A; --rule-soft:#212832;
+  --accent:#7FB3B0; --accent-soft:#1B2C2E;
+  --sev-1:#F08A80; --sev-2:#E8A45C; --sev-3:#CBB264; --sev-4:#7FBE9A;
+  --sev-1-bg:#2C1917; --sev-2-bg:#2B1F13; --sev-3-bg:#272317; --sev-4-bg:#182620;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:16px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1180px; margin:0 auto; padding:0 28px 96px}
+.col{max-width:68ch}
+h1,h2,h3,h4{font-family:Spectral,Georgia,"Times New Roman",serif; text-wrap:balance; margin:0}
+a{color:var(--accent); text-decoration:none; border-bottom:1px solid color-mix(in srgb, var(--accent) 35%, transparent)}
+a:hover{border-bottom-color:var(--accent)}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:2px}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+code{font-size:.88em; background:var(--surface-2); padding:.12em .38em; border-radius:3px}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+
+/* ── masthead ─────────────────────────────────────────────── */
+header.mast{
+  border-bottom:1px solid var(--rule); padding:64px 0 34px; margin-bottom:44px;
+  display:flex; flex-direction:column; gap:18px;
+}
+header.mast h1{font-size:clamp(34px,5.2vw,54px); line-height:1.06; font-weight:700; letter-spacing:-.015em}
+header.mast .standfirst{
+  font-family:Spectral,Georgia,serif; font-size:19px; line-height:1.55;
+  color:var(--ink-soft); max-width:62ch; font-style:italic;
+}
+.meta-row{
+  display:flex; flex-wrap:wrap; gap:10px 26px; font-size:12.5px;
+  color:var(--ink-faint); font-family:"IBM Plex Mono",monospace;
+  border-top:1px solid var(--rule-soft); padding-top:16px;
+}
+.meta-row b{color:var(--ink-soft); font-weight:500}
+
+/* ── callouts ─────────────────────────────────────────────── */
+.callout{
+  border:1px solid var(--rule); background:var(--surface); border-radius:8px;
+  padding:22px 26px; margin:34px 0; box-shadow:var(--shadow);
+  display:flex; flex-direction:column; gap:12px;
+}
+.callout.flag{border-left:4px solid var(--sev-1); background:var(--sev-1-bg); border-color:var(--rule)}
+.callout h3{font-size:17px; font-weight:600}
+.callout p{margin:0}
+.callout p + p{margin-top:2px}
+
+/* ── section ──────────────────────────────────────────────── */
+section{margin:0 0 64px}
+section > h2{
+  font-size:29px; font-weight:600; letter-spacing:-.01em; margin-bottom:6px;
+  padding-top:26px; border-top:2px solid var(--ink); display:inline-block;
+}
+.sec-lede{color:var(--ink-soft); margin:0 0 30px; max-width:66ch}
+p{margin:0 0 17px}
+
+/* ── severity system ──────────────────────────────────────── */
+.legend{display:flex; flex-wrap:wrap; gap:9px; margin:0 0 30px}
+.chip{
+  display:inline-flex; align-items:center; gap:7px; font-size:11.5px; font-weight:500;
+  font-family:"IBM Plex Mono",monospace; letter-spacing:.05em; text-transform:uppercase;
+  padding:5px 11px 5px 9px; border-radius:100px; border:1px solid transparent;
+}
+.chip::before{content:""; width:7px; height:7px; border-radius:50%; background:currentColor}
+.s1{color:var(--sev-1); background:var(--sev-1-bg); border-color:color-mix(in srgb, var(--sev-1) 22%, transparent)}
+.s2{color:var(--sev-2); background:var(--sev-2-bg); border-color:color-mix(in srgb, var(--sev-2) 22%, transparent)}
+.s3{color:var(--sev-3); background:var(--sev-3-bg); border-color:color-mix(in srgb, var(--sev-3) 22%, transparent)}
+.s4{color:var(--sev-4); background:var(--sev-4-bg); border-color:color-mix(in srgb, var(--sev-4) 22%, transparent)}
+
+.finding{
+  background:var(--surface); border:1px solid var(--rule); border-radius:9px;
+  margin:0 0 20px; box-shadow:var(--shadow); overflow:hidden;
+  display:grid; grid-template-columns:5px 1fr;
+}
+.finding > .stripe{background:var(--sev-3)}
+.finding.f1 > .stripe{background:var(--sev-1)}
+.finding.f2 > .stripe{background:var(--sev-2)}
+.finding.f3 > .stripe{background:var(--sev-3)}
+.finding.f4 > .stripe{background:var(--sev-4)}
+.finding > .body{padding:24px 28px 26px; min-width:0}
+.f-head{display:flex; align-items:baseline; gap:13px; flex-wrap:wrap; margin-bottom:5px}
+.f-id{
+  font-family:"IBM Plex Mono",monospace; font-size:12px; font-weight:500;
+  color:var(--ink-faint); font-variant-numeric:tabular-nums;
+}
+.finding h3{font-size:20px; font-weight:600; letter-spacing:-.005em; flex:1 1 260px; line-height:1.3}
+.f-body > p:last-child{margin-bottom:0}
+.label{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-faint); display:block; margin:19px 0 6px;
+}
+.evidence{
+  background:var(--surface-2); border:1px solid var(--rule-soft); border-radius:6px;
+  padding:14px 16px; font-family:"IBM Plex Mono",monospace; font-size:12.5px;
+  line-height:1.6; overflow-x:auto; white-space:pre; margin:0;
+  color:var(--ink-soft);
+}
+.evidence b{color:var(--sev-1); font-weight:500}
+.evidence i{color:var(--sev-4); font-style:normal}
+.fix{
+  border-left:3px solid var(--accent); background:var(--accent-soft);
+  padding:13px 17px; border-radius:0 6px 6px 0; margin-top:8px;
+}
+.fix p{margin:0; font-size:15px}
+.fix p + p{margin-top:9px}
+
+/* ── tables ───────────────────────────────────────────────── */
+.tw{overflow-x:auto; margin:0 0 22px; border:1px solid var(--rule); border-radius:8px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:14.5px; min-width:520px}
+th{
+  text-align:left; font-family:"IBM Plex Mono",monospace; font-size:10.5px;
+  letter-spacing:.11em; text-transform:uppercase; color:var(--ink-faint);
+  font-weight:500; padding:13px 16px; border-bottom:1px solid var(--rule); white-space:nowrap;
+}
+td{padding:13px 16px; border-bottom:1px solid var(--rule-soft); vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.num{font-variant-numeric:tabular-nums; font-family:"IBM Plex Mono",monospace; font-size:13px; white-space:nowrap}
+
+ul,ol{margin:0 0 17px; padding-left:22px}
+li{margin-bottom:8px}
+li::marker{color:var(--ink-faint)}
+ol.steps{counter-reset:s; list-style:none; padding-left:0}
+ol.steps > li{
+  counter-increment:s; position:relative; padding-left:44px; margin-bottom:17px;
+}
+ol.steps > li::before{
+  content:counter(s); position:absolute; left:0; top:1px;
+  width:28px; height:28px; border-radius:50%; background:var(--accent); color:var(--surface);
+  display:grid; place-items:center; font-family:"IBM Plex Mono",monospace;
+  font-size:12.5px; font-weight:500;
+}
+:root[data-theme="dark"] ol.steps > li::before{color:#101317}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) ol.steps > li::before{color:#101317}}
+
+details{border:1px solid var(--rule); border-radius:8px; background:var(--surface); margin:0 0 16px}
+summary{cursor:pointer; padding:15px 20px; font-weight:500; font-size:15px; list-style-position:inside}
+details[open] summary{border-bottom:1px solid var(--rule-soft)}
+details .inner{padding:18px 20px 6px}
+
+.two-up{display:grid; grid-template-columns:1fr 1fr; gap:20px; margin:0 0 26px}
+@media (max-width:760px){.two-up{grid-template-columns:1fr}}
+.panel{background:var(--surface); border:1px solid var(--rule); border-radius:9px; padding:22px 24px; box-shadow:var(--shadow)}
+.panel h3{font-size:17px; font-weight:600; margin-bottom:11px}
+.panel ul{margin-bottom:0; font-size:15px}
+
+footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; color:var(--ink-faint); font-size:13.5px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="page">
+
+<header class="mast">
+  <span class="eyebrow">Security &amp; legal assessment</span>
+  <h1>NIA Terminal Audit</h1>
+  <p class="standfirst">The site is structurally hard to attack and structurally easy to sue. Almost everything worth fixing sits in what it publishes, not in how it is served.</p>
+  <div class="meta-row">
+    <span><b>Target</b> parthrudesai.com/nia-terminal/</span>
+    <span><b>Repo</b> github.com/postybaloney/nia-terminal (public)</span>
+    <span><b>Date</b> 22 August 2026</span>
+    <span><b>Findings</b> 14</span>
+  </div>
+</header>
+
+<div class="callout flag">
+  <h3>What this report cannot do</h3>
+  <p>You asked for assurance there is <em>no way</em> you can get sued. That assurance does not exist for anyone who publishes anything. Anyone can file; the questions that can actually be answered are how likely a claim is, how much it would cost to defend, and how much of that you can remove cheaply. This report answers those three.</p>
+  <p>I am also not a lawyer, and nothing here is legal advice. The legal findings are researched against primary sources — regulator guidance, statutes, decided cases — and cited so a lawyer can pick them up quickly. Six specific points are flagged where you need one rather than research.</p>
+</div>
+
+<section>
+  <h2>The short version</h2>
+  <p class="sec-lede">Two very different risk profiles sitting behind one URL.</p>
+
+  <div class="two-up">
+    <div class="panel">
+      <h3>Attack surface: genuinely small</h3>
+      <p style="font-size:15px">Static HTML on GitHub Pages behind Cloudflare. No server, no database reachable from the internet, no login, no forms, no cookies, no browser storage, no user input that persists. Most of the OWASP Top 10 is not merely mitigated here — it is structurally inapplicable, because the components those attacks target do not exist.</p>
+      <p style="font-size:15px; margin-bottom:0">The one real class of attack is <b>injection through the ingested corpus</b>: RSS feeds and job boards feed text straight onto a public page. We closed three such holes on 20 August. One more remains, and it is the most serious finding in this report.</p>
+    </div>
+    <div class="panel">
+      <h3>Legal surface: wide open</h3>
+      <p style="font-size:15px">The site publishes <b>17 named individuals</b> right now, most of them European researchers, with their institution, their work, and dates — aggregated into a profile no single source contains. It carries no privacy notice, no terms, no attribution, and <b>no contact address of any kind</b>.</p>
+      <p style="font-size:15px; margin-bottom:0">The good news is timing. It is not yet indexed by Google. Nearly every legal exposure here is cheap to remove <em>before</em> a search engine makes the site findable by the people named on it, and expensive to remove after.</p>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="chip s1">Critical &mdash; 1</span>
+    <span class="chip s2">High &mdash; 3</span>
+    <span class="chip s3">Medium &mdash; 5</span>
+    <span class="chip s4">Low / hygiene &mdash; 5</span>
+  </div>
+
+  <p>Findings are numbered in severity order, so the number is the priority. Severity blends likelihood with cost-if-it-happens — a theoretically serious risk that no one can realistically act on is ranked below a minor one that is already live.</p>
+</section>
+
+<section>
+  <h2>Critical</h2>
+  <p class="sec-lede">One finding. It is in code I wrote, it is live, and it is the mechanism by which this project could actually cost you money.</p>
+
+  <div class="finding f1">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head">
+        <span class="f-id">01</span>
+        <h3>Evidence quotes are not verified as quotes, and the check passes entity swaps</h3>
+        <span class="chip s1">Critical</span>
+      </div>
+      <p>The affect layer publishes, next to each named company, a sentiment label, a numeric valence, and an <code>evidence</code> span presented to the reader as a quotation from the source article. <code>verify_grounding()</code> in <code>affect.py</code> is supposed to guarantee the model actually quoted rather than invented.</p>
+      <p>It does not. Its fallback branch accepts any span where 80% of the four-letter-or-longer words appear <em>anywhere</em> in the source. That is a bag-of-words test: it has no notion of word order, of which entity a clause attaches to, or of negation.</p>
+
+      <span class="label">Evidence &mdash; run against the live function</span>
+      <pre class="evidence">SOURCE: "Medtronic wins expanded approval as Acme Neuro clears safety review.
+         The FDA granted Medtronic an expanded indication this week. Separately,
+         Acme Neuro completed a safety review with no findings. A recall was
+         issued for an unrelated infusion pump made by a third manufacturer."
+
+  <i>dropped</i>       paraphrase, meaning preserved
+  <b>KEPT</b>          "A recall was issued for an unrelated infusion pump made by <b>Acme Neuro</b>"
+  <b>KEPT</b>          "Acme Neuro completed a safety review <b>with</b> findings"      (negation flipped)
+  <b>KEPT</b>          "review safety no findings with completed Acme Neuro recall issued"</pre>
+
+      <p style="margin-top:19px">Read that middle line again. The source says a recall was issued by <em>a third manufacturer</em>. The check passes a span that re-attributes that recall to a named company, and the site then prints it in quotation marks as evidence for a negative score about that company. Meanwhile a legitimate paraphrase is discarded — the filter is inverted with respect to what actually matters.</p>
+      <p>Every defence in the legal research below protects the <em>number</em>. <a href="https://caselaw.findlaw.com/court/us-dis-crt-w-d-was-at-sea/2190675.html">Browne v. Avvo</a> holds that an algorithmic rating is protected opinion because it is "virtually impossible to prove wrong." A quoted sentence is the opposite: it is a statement of fact, it is trivially provable false, and <a href="https://supreme.justia.com/cases/federal/us/497/1/">Milkovich</a> is explicit that an opinion implying undisclosed false facts is actionable. A false recall attributed to a named medical-device manufacturer is also plausibly defamation <em>per se</em>, which removes the requirement to prove financial loss.</p>
+
+      <div class="fix">
+        <p><b>Fix.</b> Require an exact substring match against the normalised source text, and delete the 80%-overlap fallback entirely. If the model paraphrased, drop the entity rather than publishing the paraphrase as a quote.</p>
+        <p>The paraphrases you lose are worth losing: an entity whose evidence cannot be quoted verbatim is an entity whose verdict you cannot show your work for. This is a few lines, it is mechanically testable, and it eliminates the whole category.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>High</h2>
+
+  <div class="finding f2">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head">
+        <span class="f-id">02</span>
+        <h3>A typo in <code>requirements.txt</code> installs an abandoned package into the runner that holds every secret</h3>
+        <span class="chip s2">High</span>
+      </div>
+      <p>Line 5 of <code>requirements.txt</code> is a bare <code>db</code>. Your local <code>db/</code> package directory exists, so this was meant as a note to self. pip reads it as an instruction to install the PyPI project named <code>db</code>.</p>
+      <p>That project is real: <em>"Databases for Humans"</em>, last released version 0.1.1 on <b>13 December 2014</b>, unmaintained for over a decade. Every CI run and every fresh <code>pip install -r requirements.txt</code> downloads and installs it.</p>
+      <p>The GitHub Actions runner that installs it holds <code>DATABASE_URL</code>, <code>GROQ_API_KEY</code>, <code>EPO_CLIENT_SECRET</code>, <code>OPENFDA_API_KEY</code> and your Resend and Slack credentials in its environment. A decade-dormant PyPI name is a textbook target for takeover; if it is ever transferred or compromised, the next nightly run hands over the whole set. You would have no signal that it happened.</p>
+      <div class="fix">
+        <p><b>Fix.</b> Delete the line. Then rotate nothing and worry not — this is a latent risk, not evidence of compromise. But delete it today; it costs one keystroke and it is the single highest-leverage line in this report.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding f2">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head">
+        <span class="f-id">03</span>
+        <h3>17 named individuals published with no privacy notice and no way to ask for removal</h3>
+        <span class="chip s2">High</span>
+      </div>
+      <p>The live page names, among others, Angelika Myśliwiec, Inês Afonso Gonçalves, Jordi Fornt, Kenza Oussalah, Simone Priori, Alexandre Herrero Matias and David Khachaturov — with institution, work title and date. The knowledge graph then links each person to their employer and to technology areas.</p>
+      <p>Three things follow that are worth being precise about, because the intuitive defences all fail:</p>
+      <ul>
+        <li><b>"It was already public" is not a defence.</b> The EDPB's <a href="https://www.edpb.europa.eu/system/files/2026-07/edpb_guidelines_2020603_webscraping_v1_en_0.pdf">Guidelines 03/2026</a> put it directly: making data available online "does not mean that the data subjects gave their consent to the scraping of their personal data for a specific purpose."</li>
+        <li><b>Aggregation is itself the interference.</b> <a href="https://ipcuria.eu/case?reference=C-131%2F12">Google Spain</a> holds that assembling scattered public facts into "a more or less detailed profile" is a distinct harm from the original publication, precisely because the information "could not have been interconnected or could have been only with great difficulty." Your own description of the graph — a profile no single source contains — is that holding restated.</li>
+        <li><b>The personal-use exemption does not apply.</b> <em>Lindqvist</em> and <em>Ryneš</em> both hold that publishing personal data to an indefinite audience on the internet is not household activity.</li>
+      </ul>
+      <p>Article 14 requires you to tell each person the purposes, the legal basis, the categories of data, their rights, and the source. The "disproportionate effort" exemption is narrower than it sounds — the Polish DPA's <a href="https://iapp.org/news/a/polish-court-overturns-dpas-first-gdpr-fine">Bisnode</a> case, over data taken from <em>public registers</em>, established that a notice on your own website does not discharge it, and the court defined disproportionate as "extremely difficult (bordering on inability)," not expensive. The EDPB's worked examples put a few thousand recent, contactable subjects on the notice-required side of the line.</p>
+      <p>Realistically, though, the thing that will actually happen is simpler: a researcher searches their own name, finds a profile of themselves, and emails you. <b>There is currently no address to email.</b> That is what converts a five-minute courtesy into a complaint.</p>
+      <div class="fix">
+        <p><b>Fix.</b> Three artefacts, all drafted for you alongside this report: a privacy notice naming you as controller and stating the sources, a removal route (a dedicated address, monitored), and a stated policy of same-day removal on request without argument.</p>
+        <p>Then add <code>noindex</code> until the rest is in place. Search indexing is the event that turns "nobody has found this" into <em>Google Spain</em>, and it costs one meta tag to defer.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding f2">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head">
+        <span class="f-id">04</span>
+        <h3>EPO's terms contain a clause aimed squarely at what this site does</h3>
+        <span class="chip s2">High</span>
+      </div>
+      <p>You accepted a contract to get OPS credentials. Article 3.2 of the <a href="https://developers.epo.org/sites/default/files/terms_and_conditions_OPS%202.0%20EN_DE_FR.pdf">OPS terms</a> reads: <em>"Users are not permitted to make the data as such available to the public or to copy and/or distribute the data as such."</em></p>
+      <p>Article 3.1 does permit including OPS data in your own products and distributing it as part of them, and Article 4.6 explicitly allows commercial use — there is no non-commercial restriction. The entire question is whether a table of patent titles, assignees, dates and IDs with links back is a "product" under 3.1 or the data "as such" under 3.2. The terms never define "as such."</p>
+      <p>This is the one finding where the exposure is <b>breach of contract</b> rather than a diffuse statutory risk, which makes it the most concretely actionable claim on the list. The EU <em>sui generis</em> database right may also apply to DOCDB independently. Note that the scored leaderboard and the affect layer are genuine transformations and help the 3.1 argument considerably; the raw "Latest patents" table is the part that looks like 3.2.</p>
+      <div class="fix">
+        <p><b>Lawyer question, and a real one.</b> Also read the <em>Fair use charter</em> — it is contractually binding via Art. 3.3 and I could not retrieve it (Espacenet blocks automated fetches), so you need to open it manually.</p>
+        <p>Cheap interim posture: lead with the derived layers, keep raw per-record tables short, and always link back to Espacenet or Google Patents rather than presenting the record as a destination in itself.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Medium</h2>
+
+  <div class="finding f3">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head"><span class="f-id">05</span><h3>ClinicalTrials.gov's four mandatory conditions are breached by default</h3><span class="chip s3">Medium</span></div>
+      <p>Redistribution is permitted, but the <a href="https://clinicaltrials.gov/about-site/terms-conditions">terms</a> attach four conditions that are operative, not optional: attribute the source as ClinicalTrials.gov; keep the data current at all times; <em>clearly display the date the data were processed</em>; and state any modifications with a complete description. NLM's overlapping terms add the phrase <em>"Courtesy of the U.S. National Library of Medicine."</em></p>
+      <p>A nightly cache with no processing date and no attribution meets none of them. This is the easiest breach on the list to fix and the easiest to notice.</p>
+      <div class="fix"><p><b>Fix.</b> An attribution block in the footer plus a per-source "data processed on" stamp. Both are already in your data model.</p></div>
+    </div>
+  </div>
+
+  <div class="finding f3">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head"><span class="f-id">06</span><h3>Substack content has no licence at any layer</h3><span class="chip s3">Medium</span></div>
+      <p>An RSS feed is a distribution mechanism, not a copyright grant. <a href="https://substack.com/tos">Substack's terms</a> reserve everything to the writer and prohibit conduct that <em>"copies or stores any significant portion of the content"</em> — while free-post feeds carry the <b>entire article body</b>, not a snippet.</p>
+      <p>This is the highest per-item copyright exposure on the site, and unlike the statutory risks it has a motivated individual rights-holder attached to every item. It is also the most likely origin of a DMCA notice to GitHub, which is the fastest route to the site simply disappearing — no jurisdictional analysis required.</p>
+      <div class="fix">
+        <p><b>Fix.</b> Store title, author, publication, date and link. Generate your own summary rather than keeping feed body text. Drop paywalled sources from the quote layer entirely — they fail the "lawfully made available" limb of the EU quotation exception and sink US fair use factor four at the same time.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding f3">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head"><span class="f-id">07</span><h3>No security headers &mdash; and one of them is a privacy leak, not just a hardening gap</h3><span class="chip s3">Medium</span></div>
+      <p>An external scan grades the site <b>F</b>: no Content-Security-Policy, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy or Permissions-Policy.</p>
+      <p>Most of that grade is noise for a static page — clickjacking a read-only document achieves nothing. Two headers genuinely matter:</p>
+      <ul>
+        <li><b>Content-Security-Policy</b> is real defence-in-depth. All three XSS holes fixed on 20 August would have been inert under a strict CSP. Given that the page is fed by RSS, a fourth is a matter of time.</li>
+        <li><b>Referrer-Policy</b> is a privacy issue. Every outbound source link currently sends the full referring URL to a third party — including <code>graph.html?focus=…&amp;name=…</code> when someone deep-links into an entity. That is your own page structure leaking to Google, the FDA, NIH and every publisher you link to.</li>
+      </ul>
+      <div class="fix"><p><b>Fix.</b> Cloudflare is already in front of the domain, so both are a Transform Rule rather than a code change. <code>Referrer-Policy: strict-origin-when-cross-origin</code> and <code>X-Content-Type-Options: nosniff</code> are free; CSP needs one pass to allow the inline styles and scripts the generators emit.</p></div>
+    </div>
+  </div>
+
+  <div class="finding f3">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head"><span class="f-id">08</span><h3>Every dependency is unpinned with no upper bound and no lockfile</h3><span class="chip s3">Medium</span></div>
+      <p>All requirements use <code>&gt;=</code> with no ceiling. Any release of any of eighteen packages lands in the next nightly run unreviewed — that is both a reproducibility problem (a green build yesterday says nothing about today) and the delivery mechanism for a compromised release. Same runner, same secrets as finding 02.</p>
+      <div class="fix"><p><b>Fix.</b> Pin exact versions, or commit a lockfile and install from it. Then enable Dependabot so upgrades arrive as reviewable pull requests rather than silently at 07:00 UTC.</p></div>
+    </div>
+  </div>
+
+  <div class="finding f3">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="f-head"><span class="f-id">09</span><h3>bioRxiv and medRxiv ask not to be redistributed, and publish no metadata licence</h3><span class="chip s3">Medium</span></div>
+      <p>Their <a href="https://www.biorxiv.org/tdm">TDM terms</a> state the repository <em>"is not intended as a source for further redistribution of articles posted on bioRxiv, or their derivatives"</em> and require indexing services to <em>"link back to the text hosted at bioRxiv rather than re-host content."</em> Unlike arXiv — whose metadata is expressly CC0 and reusable commercially — they publish no metadata dedication at all, and authors may select "no reuse without permission."</p>
+      <div class="fix"><p><b>Fix.</b> Titles, authors, dates and DOIs are low risk. Abstracts from these two servers are not — link rather than store them, and treat arXiv and bioRxiv differently in the ingestor rather than as one "preprints" bucket.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Low &amp; hygiene</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>Finding</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td class="num">10</td><td>Google Patents BigQuery is CC BY 4.0 and requires crediting <b>both IFI CLAIMS Patent Services and Google</b>. No attribution appears anywhere on the site. Other tables in that project carry different licences — ChEMBL is CC BY-SA 3.0, which is share-alike and viral.</td><td>Add the credit string; check the licence per table you query.</td></tr>
+        <tr><td class="num">11</td><td>The graph tooltip escapes node names but interpolates <code>n.t</code> and <code>n.s</code> raw. Both are a fixed internal vocabulary today, so this is not exploitable — it is an unguarded path next to three that were.</td><td>Wrap both in <code>esc()</code>.</td></tr>
+        <tr><td class="num">12</td><td><code>sitemap.xml</code> advertises <code>/privacy</code> and <code>/terms</code>. Both return <b>404</b>. Whatever was intended there was never published.</td><td>Publish them &mdash; drafts accompany this report.</td></tr>
+        <tr><td class="num">13</td><td>The terminal is fully crawlable (<code>Allow: /</code>) but <b>not yet indexed</b>. AI crawlers are blocked; Googlebot is not. The sitemap does not list the terminal, so nothing is actively pushing it into the index.</td><td>Add <code>noindex</code> until findings 01&ndash;03 are closed. This is the cheapest single risk reduction available.</td></tr>
+        <tr><td class="num">14</td><td>"NIA" collides with the NIH's <b>National Institute on Aging</b>, which uses the same acronym in the same broad field. A site publishing NIH grant data under that acronym invites confusion, and the branding cost of changing it rises with every person you show it to.</td><td>Decide now rather than later.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>What is already sound</h2>
+  <p class="sec-lede">Worth stating plainly, because an audit that lists only problems gives a misleading picture of where the work stands.</p>
+  <ul>
+    <li><b>Secrets have never been committed.</b> <code>.env</code> is gitignored and absent from history. The repo is public and clean.</li>
+    <li><b>Workflow permissions are minimal and correct</b> — <code>contents: read</code>, <code>pages: write</code>, <code>id-token: write</code>, and nothing more.</li>
+    <li><b>No script-injection surface in CI.</b> The only <code>github.event</code> interpolation is <code>schedule</code>, which no external party controls. This is the most common GitHub Actions vulnerability and it is not present.</li>
+    <li><b>No injectable runtime.</b> No forms, no auth, no cookies, no browser storage, no server. There is no session to steal, no CSRF target, no SQL reachable from the internet.</li>
+    <li><b>The link layer is hardened and regression-tested.</b> Scheme allow-listing, DOM-parsing tests rather than string matching, and a verified negative control proving the tests catch the original bug.</li>
+    <li><b>Several sources are unambiguously clear</b> — openFDA is CC0, NIH RePORTER carries no reuse restriction at all, SEC EDGAR is expressly free to reuse, and arXiv metadata is expressly CC0 for commercial use.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Legal exposure, calibrated</h2>
+  <p class="sec-lede">The theoretical picture and the practical picture point in different directions, and the gap between them is where the useful decisions live.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Scenario</th><th>Likelihood</th><th>Cost if it happens</th></tr></thead>
+      <tbody>
+        <tr><td>A named researcher emails asking to be removed</td><td>Moderate, rising with traffic</td><td>Zero &mdash; <em>if</em> there is an address to email</td></tr>
+        <tr><td>DMCA notice to GitHub over quoted newsletter text</td><td>Low&ndash;moderate</td><td>Site offline; restorable. Fastest path to it vanishing.</td></tr>
+        <tr><td>DPA complaint &rarr; a letter asking questions</td><td>Low while unindexed</td><td>Time, stress, a lawyer consult</td></tr>
+        <tr><td><b>US cease-and-desist over the affect layer</b></td><td><b>Low but not negligible</b></td><td><b>Defence costs &mdash; the only genuinely expensive outcome</b></td></tr>
+        <tr><td>EU fine actually collected from you</td><td>Near zero</td><td>See below</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>On the last row, the EU's own regulator body is the best source. The EDPB's <a href="https://www.edpb.europa.eu/system/files/2024-10/edpb_20240417_report_extraterritorial_enforcement_gdpr_en.pdf">2024 report on extraterritorial enforcement</a> concludes that enforcement against entities without EU property is "very difficult, if not impossible," and that penalty decisions would be "with very high probability effectively unenforceable in the United States." US law excludes foreign penalty judgments from recognition, and there is no precedent for enforcing one on comity grounds.</p>
+  <p>The closest real precedent is <a href="https://www.twobirds.com/en/insights/2021/netherlands/finding-locatefamily-com-dutch-dpa-imposes-525000-euro-fine-for-not-having-a-gdpr-representative">LocateFamily.com</a>, a free site publishing names and addresses. The Dutch DPA fined it €525,000 — <em>solely</em> for failing to appoint an Article 27 representative, having never established which country the operator was in despite involving eleven other DPAs and the Canadian regulator. Collection was assessed as unlikely. That case is instructive in both directions: the fine was for the bright-line procedural failure rather than the substance, and it was uncollectable.</p>
+
+  <div class="callout">
+    <h3>Two things that cut against the obvious instinct</h3>
+    <p><b>Publishing more openly is safer for the affect layer, not riskier.</b> Algorithmic ratings are protected as opinion largely when they address a matter of public concern. The credit-rating cases that <em>lost</em> that protection — the <em>Abu Dhabi Commercial Bank</em> and <em>CalPERS v. Moody's</em> line — involved ratings circulated to a narrow, selected audience. "Shared with a handful of people" resembles those cases; a genuinely public publication about an industry resembles <a href="https://www.dwt.com/insights/2013/09/6th-circuit-rules-that-tripadvisors-ranking-of-dir">Seaton v. TripAdvisor</a>, which won.</p>
+    <p>This pulls against the GDPR analysis, where lower visibility is unambiguously safer. The resolution is sequencing, not choosing: <b>close findings 01 through 03 first, then go public properly.</b></p>
+    <p><b>An LLC protects you less than you would think, and costs you something.</b> It does not shield you from torts you personally commit, and for a one-person publishing operation that exception swallows most of the rule — a plaintiff names both. It does nothing for a DPA complaint or a GitHub takedown, and GDPR treats a natural person as a controller regardless. It also makes the activity look commercial, which actively weakens the DSM Article 15 non-commercial carve-out, fair use factor one, and the legitimate-interests balance. <b>Media liability insurance is worth more per dollar</b>, because defence costs are the real exposure and a general liability policy typically excludes publishing.</p>
+  </div>
+</section>
+
+<section>
+  <h2>What to do, in order</h2>
+  <p class="sec-lede">The first four are an afternoon and remove most of the tail. Nothing below needs to wait for a lawyer.</p>
+
+  <ol class="steps">
+    <li><b>Delete the <code>db</code> line from <code>requirements.txt</code>.</b> One keystroke, closes finding 02.</li>
+    <li><b>Add <code>noindex</code> to all three pages.</b> Buys unlimited time on everything GDPR-shaped without changing who you can share the link with.</li>
+    <li><b>Fix the evidence-span check to require exact substring matching.</b> Closes the only finding that can realistically become a lawsuit.</li>
+    <li><b>Publish the privacy notice, terms, and sources page</b> — drafted alongside this report — and put a real monitored address on all three. Almost every realistic complaint terminates at that address for free.</li>
+    <li><b>Add Referrer-Policy and nosniff via Cloudflare</b>, then a CSP once you have checked it against all three generated pages.</li>
+    <li><b>Pin dependencies and enable Dependabot.</b></li>
+    <li><b>Stop storing feed body text and abstracts from bioRxiv and medRxiv.</b> Link instead.</li>
+    <li><b>Then</b> take the EPO Article 3.1/3.2 question, the journalism-exemption question, and media liability cover to a lawyer &mdash; in one session, with this report in hand.</li>
+  </ol>
+
+  <div class="callout flag">
+    <h3>The one cliff to watch</h3>
+    <p>Everything above assumes this stays free and non-commercial. The moment you sell access, use it in a pitch, or raise on it, several protections you currently rely on disappear <em>at once</em>: the DSM Article 15 individual-and-non-commercial carve-out, fair use factor one, the legitimate-interests balance under Article 6(1)(f), and FTC jurisdiction, which requires commerce. Talk to a lawyer <em>before</em> that step, not after.</p>
+    <p>The second latent variable: physical presence or assets in the EU or UK converts the entire enforcement analysis above from near-inert to live. If you are ever considering working, incorporating, or moving there, revisit this.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Method, and what I could not verify</h2>
+  <p class="sec-lede">So you can judge how much weight each finding carries.</p>
+  <details>
+    <summary>What was actually checked</summary>
+    <div class="inner">
+      <ul>
+        <li>Live fetch of the published pages, <code>robots.txt</code> and <code>sitemap.xml</code>; external security-header scan; a search-index check confirming the terminal is not yet indexed.</li>
+        <li>Direct execution of <code>verify_grounding()</code> against constructed adversarial inputs — finding 01 is a demonstrated result, not a code reading.</li>
+        <li>Read of the workflow permissions and every <code>github.event</code> interpolation; confirmation that <code>.env</code> is gitignored and absent from history.</li>
+        <li>Read of the full requirements file; PyPI lookup of the <code>db</code> project.</li>
+        <li>Primary-source retrieval of the terms for all nine data sources, and of EDPB guidelines, CJEU judgments and US case law for the legal findings. Every legal claim above links to what it rests on.</li>
+      </ul>
+    </div>
+  </details>
+  <details>
+    <summary>What could not be verified, and why it matters</summary>
+    <div class="inner">
+      <ul>
+        <li><b>The EPO Fair use charter.</b> Contractually binding via Art. 3.3; Espacenet returns 403 to automated fetches. You need to read this manually — it is the document that resolves finding 04.</li>
+        <li><b>Whether a separate EPO licence governs DOCDB bulk data.</b> No such document could be located.</li>
+        <li><b>Any terms at all for <code>api.biorxiv.org</code> or the Greenhouse job board API.</b> Neither publishes any. Absence of terms is not permission.</li>
+        <li><b>Response headers directly</b> — read via an external scanner rather than a raw request, so treat the header list as one-source.</li>
+        <li>I did not test the site against a live exploitation attempt, and did not review the Postgres instance, its network exposure, or its credentials rotation. Both are worth a separate pass.</li>
+      </ul>
+    </div>
+  </details>
+  <details>
+    <summary>Six points where you need a lawyer, not more research</summary>
+    <div class="inner">
+      <ol>
+        <li>The EPO Article 3.1 versus 3.2 boundary, and whether EU database right attaches to DOCDB.</li>
+        <li>Anything commercial &mdash; before, not after.</li>
+        <li>Whether the journalism or research exemption under Article 85(2) is available to you. It is member-state law across 27 jurisdictions, and <em>Buivids</em> opens the door to non-professionals but sits awkwardly with a competitive-intelligence product.</li>
+        <li>Whether pulling a published Substack RSS feed counts as "scraping" under terms that forbid scraping while <code>robots.txt</code> permits fetching the feed. Genuinely unresolved.</li>
+        <li>Any specific person or company who has actually complained. The general analysis will not be the right answer for a live demand &mdash; and do not reply to one yourself.</li>
+        <li>Entity choice and, more importantly, procuring media liability cover.</li>
+      </ol>
+    </div>
+  </details>
+</section>
+
+<footer class="end">
+  Prepared 22 August 2026 against parthrudesai.com/nia-terminal/ and postybaloney/nia-terminal at commit <span class="mono">e4bc8a5</span> plus uncommitted working-tree changes. Not legal advice. Findings 01, 11 and the link-layer fixes concern code written during this engagement.
+</footer>
+
+</div>

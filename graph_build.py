@@ -47,6 +47,7 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 import sqlite3
@@ -55,6 +56,9 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+import suppress
+from sourcelinks import patent_url, safe_url, signal_url, thesis_url
 
 log = logging.getLogger("graph")
 
@@ -213,6 +217,52 @@ def normalise_person(name: str) -> str:
     return f"{fi} {last}".strip()
 
 
+def work_meta(*, url: str | None = None, title: str | None = None,
+              amount: int | None = None, **extra) -> str:
+    """
+    Build the `meta` JSON blob for a WORK node.
+
+    Until 2026-08-20 `meta` was an untyped string that meant three different
+    things depending on which loader wrote it: the URL for signals and theses,
+    the TITLE for patents, and a formatted dollar amount for demo grants. The
+    renderer therefore could not use it for anything, because it had no way to
+    know which of the three it was holding — the column was written by five
+    call sites and read by none.
+
+    The schema comment always said "JSON blob (url, amount, dates...)". This
+    makes that true.
+    """
+    d = {k: v for k, v in
+         (("url", safe_url(url)), ("title", (title or "").strip()[:200] or None),
+          ("amount", amount))
+         if v is not None}
+    d.update({k: v for k, v in extra.items() if v is not None})
+    return json.dumps(d, separators=(",", ":")) if d else ""
+
+
+def read_meta(raw: str | None) -> dict:
+    """
+    Read a `meta` value written by any version of the builder.
+
+    Legacy rows hold a bare string. A bare string that parses as a URL is
+    treated as one, anything else as a title — which recovers the old
+    signal/thesis rows correctly and the old patent rows correctly, without
+    needing to know which loader wrote them.
+    """
+    if not raw:
+        return {}
+    txt = str(raw).strip()
+    if txt.startswith("{"):
+        try:
+            d = json.loads(txt)
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    u = safe_url(txt)
+    return {"url": u} if u else {"title": txt[:200]}
+
+
 def entity_id(etype: str, key: str) -> str:
     return str(uuid.uuid5(NS, f"{etype}:{key}"))
 
@@ -238,6 +288,11 @@ class GraphBuilder:
         self.conn.executescript(SCHEMA)
         self._ent_cache: dict[str, str] = {}
         self._names_seen: dict[str, set] = {}
+        # Loaded once per build. A corrupt file raises here rather than
+        # silently publishing everyone who asked to be removed.
+        self.suppressions = suppress.load()
+        self.suppressed_people = 0
+        self.suppressed_orgs = 0
 
     # ── writing ──────────────────────────────────────────────────────────────
 
@@ -249,6 +304,18 @@ class GraphBuilder:
     ) -> str | None:
         name = (name or "").strip()
         if not name or len(name) < 2:
+            return None
+
+        # Removal requests are enforced HERE rather than at each of the five
+        # call sites that create people, so a new ingestor inherits it instead
+        # of having to remember. Returning None also drops every relation that
+        # would have attached to the node, because add_relation ignores a null
+        # endpoint — so the person does not survive as an unnamed hub.
+        if etype == "PERSON" and self.suppressions.blocks_person(name):
+            self.suppressed_people += 1
+            return None
+        if etype == "ORG" and self.suppressions.blocks_org(name):
+            self.suppressed_orgs += 1
             return None
 
         if etype == "ORG":
@@ -351,7 +418,8 @@ def build_from_db(gb: GraphBuilder, days: int = 3650) -> None:
                 "WORK", f"{p.source_id}", subtype="patent",
                 description=(p.title or "")[:900],
                 source_doc=f"patent:{p.source}:{p.source_id}",
-                meta=(p.title or "")[:200],
+                meta=work_meta(url=patent_url(p.source_id, p.source),
+                               title=p.title),
                 event_date=_d.isoformat()[:10] if _d else "",
             )
             for a in (p.assignees or []):
@@ -387,7 +455,8 @@ def build_from_db(gb: GraphBuilder, days: int = 3650) -> None:
                     "WORK", f"{s.source}:{s.source_id}", subtype=sub,
                     description=(s.title or "")[:900],
                     source_doc=f"{s.source}:{s.source_id}",
-                    meta=(s.url or "")[:300],
+                    meta=work_meta(url=signal_url(s.url), title=s.title,
+                                   amount=s.amount),
                     event_date=(s.event_date.isoformat()[:10]
                                 if s.event_date else ""),
                     quality=float((s.raw_payload or {}).get("quality_weight", 1.0)),
@@ -439,7 +508,9 @@ def build_from_db(gb: GraphBuilder, days: int = 3650) -> None:
                     "WORK", f"thesis:{t.source_id}", subtype="thesis",
                     description=(t.title or "")[:900],
                     source_doc=f"thesis:{t.source_id}",
-                    meta=(getattr(t, 'url', '') or "")[:300],
+                    meta=work_meta(url=thesis_url(getattr(t, 'url', None),
+                                                  getattr(t, 'doi', None)),
+                                   title=t.title),
                 )
                 inst = getattr(t, "institution", None)
                 if inst:
@@ -601,7 +672,8 @@ def build_demo(gb: GraphBuilder) -> None:
     ]
     for pid, title, orgs, invs, techs in P:
         w = gb.add_entity("WORK", pid, subtype="patent", description=title,
-                          source_doc=f"patent:epo:{pid}", meta=title)
+                          source_doc=f"patent:epo:{pid}",
+                          meta=work_meta(url=patent_url(pid), title=title))
         for o in orgs:
             oid = gb.add_entity("ORG", o, source_doc=f"patent:{pid}")
             gb.add_relation(w, oid, "filed_by", f"patent:{pid}")
@@ -623,7 +695,7 @@ def build_demo(gb: GraphBuilder) -> None:
     ]
     for tid, title, inst, authors, techs in TH:
         w = gb.add_entity("WORK", tid, subtype="thesis", description=title,
-                          source_doc=tid, meta=title)
+                          source_doc=tid, meta=work_meta(title=title))
         oid = gb.add_entity("ORG", inst, source_doc=tid)
         gb.add_relation(w, oid, "filed_by", tid)
         for a in authors:
@@ -641,7 +713,11 @@ def build_demo(gb: GraphBuilder) -> None:
     ]
     for gid, title, org, amt, techs in G:
         w = gb.add_entity("WORK", gid, subtype="grant", description=title,
-                          source_doc=gid, meta=f"${amt:,}")
+                          source_doc=gid,
+                          meta=work_meta(
+                              url="https://reporter.nih.gov/search/"
+                                  + gid.split(":", 1)[-1],
+                              title=title, amount=amt))
         gb.add_relation(w, gb.add_entity("ORG", org, source_doc=gid),
                         "funded_by", gid)
         for t in techs:
@@ -653,7 +729,10 @@ def build_demo(gb: GraphBuilder) -> None:
            "Medtronic, Inc.", ["Deep Brain Stimulation", "Closed-Loop Neuromodulation"])]
     for nct, title, sponsor, techs in TR:
         w = gb.add_entity("WORK", nct, subtype="trial", description=title,
-                          source_doc=nct, meta=title)
+                          source_doc=nct,
+                          meta=work_meta(
+                              url=f"https://clinicaltrials.gov/study/{nct}",
+                              title=title))
         gb.add_relation(w, gb.add_entity("ORG", sponsor, source_doc=nct),
                         "sponsored_by", nct)
         for t in techs:
@@ -665,7 +744,11 @@ def build_demo(gb: GraphBuilder) -> None:
             "Boston Scientific Corp", ["Deep Brain Stimulation"])]
     for k, title, org, techs in FDA:
         w = gb.add_entity("WORK", k, subtype="clearance", description=title,
-                          source_doc=f"fda:{k}", meta=title)
+                          source_doc=f"fda:{k}",
+                          meta=work_meta(
+                              url="https://www.accessdata.fda.gov/scripts/cdrh/"
+                                  f"cfdocs/cfpmn/pmn.cfm?ID={k}",
+                              title=title))
         gb.add_relation(w, gb.add_entity("ORG", org, source_doc=f"fda:{k}"),
                         "filed_by", f"fda:{k}")
         for t in techs:
@@ -679,7 +762,7 @@ def build_demo(gb: GraphBuilder) -> None:
              ["Brain-Computer Interface"])]
     for jid, title, org, techs in JOBS:
         w = gb.add_entity("WORK", jid, subtype="posting", description=title,
-                          source_doc=jid, meta=title)
+                          source_doc=jid, meta=work_meta(title=title))
         oid = gb.add_entity("ORG", org, source_doc=jid)
         gb.add_relation(w, oid, "filed_by", jid)
         for t in techs:
@@ -690,7 +773,7 @@ def build_demo(gb: GraphBuilder) -> None:
             ["Brain-Computer Interface", "Deep Brain Stimulation"])]
     for aid, title, pub, techs in ART:
         w = gb.add_entity("WORK", aid, subtype="article", description=title,
-                          source_doc=aid, meta=title)
+                          source_doc=aid, meta=work_meta(title=title))
         gb.add_relation(w, gb.add_entity("ORG", pub, source_doc=aid),
                         "filed_by", aid)
         for t in techs:

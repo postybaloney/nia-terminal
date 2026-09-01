@@ -185,6 +185,10 @@ class AffectResult:
     entities: list = field(default_factory=list)
     ok: bool = False
     error: str = ""
+    # Entities verify_grounding removed, with the reason. Kept so a batch that
+    # drops everything reads as a prompting problem in the log rather than as
+    # a genuinely quiet corpus — silent zero is the failure mode that hides.
+    ungrounded: list = field(default_factory=list)
 
     @property
     def grounded_entities(self) -> list:
@@ -341,29 +345,108 @@ def parse(raw: str) -> AffectResult:
     return AffectResult(entities=out, ok=True)
 
 
+# ── verbatim comparison: fold what is not a difference in meaning ────────────
+#
+# A verbatim check is only usable if it does not reject real quotes. Models
+# retype spans through their own tokeniser, so a source containing a curly
+# apostrophe comes back with a straight one, an em-dash comes back as a
+# hyphen, and a non-breaking space comes back as a space. None of those change
+# what the source said, and all of them would fail a naive `in` test.
+#
+# Built by RANGE rather than by listing the characters that happened to break
+# a test, because the failure mode of the list approach is silent: one
+# unlisted codepoint (U+2011, the non-breaking hyphen, was the one that caught
+# this) rejects every quote from an entire publication whose CMS emits it.
+def _build_fold() -> dict:
+    fold: dict[int, str | None] = {}
+    # Dashes and hyphens of every stripe -> ASCII hyphen.
+    for cp in [*range(0x2010, 0x2016), 0x2212, 0x2E3A, 0x2E3B,
+               0xFE58, 0xFE63, 0xFF0D]:
+        fold[cp] = "-"
+    # Single and double quotation marks, primes, fullwidth -> ASCII.
+    for cp in [0x2018, 0x2019, 0x201A, 0x201B, 0x2032, 0xFF07]:
+        fold[cp] = "'"
+    for cp in [0x201C, 0x201D, 0x201E, 0x201F, 0x2033, 0xFF02]:
+        fold[cp] = '"'
+    # Every Unicode space separator -> ASCII space (collapsed later anyway).
+    for cp in [0x00A0, *range(0x2000, 0x200B), 0x202F, 0x205F, 0x3000]:
+        fold[cp] = " "
+    # Zero-width and soft hyphens carry no meaning and must vanish, not
+    # become a space — a soft hyphen mid-word would otherwise split it.
+    for cp in [0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF]:
+        fold[cp] = None
+    fold[0x2026] = "..."
+    return fold
+
+
+_FOLD = _build_fold()
+
+
+def _normalise(text: str) -> str:
+    """Fold the differences that are not differences in meaning."""
+    t = (text or "").translate(_FOLD).lower()
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def verify_grounding(result: AffectResult, title: str | None,
                      body: str | None) -> AffectResult:
     """
-    Drop entities whose evidence span is not actually in the source text.
+    Drop entities whose evidence span is not literally present in the source.
 
-    The model is told to quote verbatim; this checks that it did. Without the
-    check, `evidence` is decorative and a fabricated verdict looks exactly like
-    a real one.
+    ─────────────────────────────────────────────────────────────────────────
+    This function used to accept a second, looser class of span: if 80% of the
+    four-letter-or-longer words appeared ANYWHERE in the source, it kept the
+    entity. That was a bag-of-words test, and it had no notion of word order,
+    of which entity a clause attached to, or of negation. Run against a source
+    reading
+
+        "...A recall was issued for an unrelated infusion pump made by a
+         third manufacturer."
+
+    it accepted all three of these as grounded evidence:
+
+        "A recall was issued for an unrelated infusion pump made by Acme Neuro"
+        "Acme Neuro completed a safety review WITH findings"   (negation flipped)
+        "review safety no findings with completed Acme Neuro recall issued"
+
+    while REJECTING an honest paraphrase that preserved the meaning. The filter
+    was inverted with respect to what actually matters: it passed the exact
+    failure mode that turns a sentiment score into a false factual claim about
+    a named company, and blocked the harmless one.
+
+    That matters because the published span is shown to readers inside
+    quotation marks, as the evidence for a negative verdict. A number is
+    defensible as opinion — it is a subjective composite that two systems
+    would weigh differently. A quoted sentence is not: it is a statement of
+    fact about what a source said, and it is trivially provable false.
+
+    So the rule is now simply: it is either a quote or it is not. Paraphrases
+    are dropped, not published. An entity whose evidence cannot be quoted
+    verbatim is an entity whose verdict cannot be shown, and an unshowable
+    verdict is worth less than no verdict.
+    ─────────────────────────────────────────────────────────────────────────
     """
-    src = re.sub(r"\s+", " ", f"{title or ''}. {body or ''}").lower()
-    kept = []
+    src = _normalise(f"{title or ''}. {body or ''}")
+    kept, dropped = [], []
     for e in result.entities:
-        ev = re.sub(r"\s+", " ", e.evidence).lower().strip().strip('."')
-        if not ev:
+        ev = _normalise(e.evidence).strip('."\'')
+        # A span short enough to appear by coincidence is not evidence of
+        # anything. "the fda" is a substring of half the corpus.
+        if len(ev) < 20:
+            dropped.append((e, "span too short to be evidence"))
             continue
         if ev in src:
             kept.append(e)
         else:
-            # allow light paraphrase: most content words must be present
-            words = [w for w in re.findall(r"[a-z]{4,}", ev)]
-            if words and sum(1 for w in words if w in src) / len(words) >= 0.8:
-                kept.append(e)
+            dropped.append((e, "not a verbatim span of the source"))
+
     result.entities = kept
+    # Surfaced so a run that silently drops everything is visible as a
+    # prompting or model problem rather than looking like a quiet corpus.
+    result.ungrounded = [
+        {"text": e.text, "reason": why, "evidence": e.evidence[:120]}
+        for e, why in dropped
+    ]
     return result
 
 
@@ -499,26 +582,55 @@ def selftest() -> int:
             print("      !! values not clamped")
             ok = False
 
-    print("\n  ── grounding: fabricated evidence must be dropped ──")
-    fabricated = ('{"entities":[{"text":"Medtronic","type":"company","sentiment":"positive",'
-                  '"valence":0.9,"arousal":0.7,"evidence":"Medtronic announced record '
-                  'revenue growth across all segments"}]}')
-    r = verify_grounding(parse(fabricated), ARTICLE_T, ARTICLE_B)
-    dropped = len(r.entities) == 0
-    print(f"    {'  ' if dropped else '!!'}quote absent from source -> "
-          f"{'dropped' if dropped else 'KEPT (bad)'}")
-    if not dropped:
-        ok = False
+    print("\n  ── grounding: evidence is a quote or it is nothing ──")
+    # Every case below is a real failure mode of the previous 80%-content-word
+    # check. It accepted the three marked ATTACK and rejected the paraphrase —
+    # exactly inverted from what matters, because the published span is shown
+    # to readers inside quotation marks as the basis for a verdict about a
+    # named company.
+    def _ev(text, name="Abbott"):
+        import json as _j
+        return _j.dumps({"entities": [{
+            "text": name, "type": "company", "sentiment": "positive",
+            "valence": 0.8, "arousal": 0.6, "evidence": text}]})
 
-    paraphrase = ('{"entities":[{"text":"Abbott","type":"company","sentiment":"positive",'
-                  '"valence":0.8,"arousal":0.6,"evidence":"Abbott received approval for '
-                  'its DBS system"}]}')
-    r = verify_grounding(parse(paraphrase), ARTICLE_T, ARTICLE_B)
-    kept = len(r.entities) == 1
-    print(f"    {'  ' if kept else '!!'}close paraphrase          -> "
-          f"{'kept' if kept else 'DROPPED (too strict)'}")
-    if not kept:
-        ok = False
+    cases = [
+        # (label, evidence span, must_be_kept)
+        ("verbatim span",
+         "Abbott received FDA approval for its DBS system", True),
+        ("verbatim, mid-sentence",
+         "a Class I recall was issued for a competitor's lead", True),
+        ("typographic fold: curly -> straight",
+         "a Class I recall was issued for a competitor\u2019s lead", True),
+        ("ATTACK  entity swap",
+         "a Class I recall was issued for Abbott's lead", False),
+        ("ATTACK  negation inserted",
+         "Abbott received no FDA approval for its DBS system", False),
+        ("ATTACK  word salad, same vocabulary",
+         "recall issued Abbott FDA approval competitor lead system was", False),
+        ("fabricated outright",
+         "Abbott announced record revenue growth across all segments", False),
+        ("paraphrase, meaning preserved",
+         "Abbott received approval for its DBS system", False),
+        ("too short to be evidence", "Abbott", False),
+    ]
+    for label, ev, want_kept in cases:
+        r = verify_grounding(parse(_ev(ev)), ARTICLE_T, ARTICLE_B)
+        got_kept = len(r.entities) == 1
+        good = got_kept == want_kept
+        ok = ok and good
+        verdict = "kept" if got_kept else "dropped"
+        print(f"    {'  ' if good else '!!'}{label:<38} -> {verdict}")
+        if not good:
+            print(f"        expected {'kept' if want_kept else 'dropped'}")
+
+    # A drop must be explained, not silent.
+    r = verify_grounding(parse(_ev("Abbott announced record revenue growth")),
+                         ARTICLE_T, ARTICLE_B)
+    explained = bool(r.ungrounded) and "reason" in (r.ungrounded[0] or {})
+    ok = ok and explained
+    print(f"    {'  ' if explained else '!!'}{'drops are reported with a reason':<38} -> "
+          f"{r.ungrounded[0]['reason'] if explained else 'NOT REPORTED'}")
 
     print("\n  ── aggregation ──")
     mixed = ('{"entities":['

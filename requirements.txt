@@ -2,7 +2,9 @@
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 alembic>=1.13.0
-db
+# NOTE: the local `db/` package is part of this repo, not a dependency.
+# A bare `db` line here installs the abandoned 2014 PyPI project of that
+# name into the CI runner that holds every secret. Do not re-add it.
 
 # HTTP
 httpx>=0.27.0

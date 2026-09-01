@@ -122,9 +122,14 @@ def main() -> int:
         "--graph", gdb, *demo])
 
     # 3 · intelligence layer issue
+    # The markdown goes OUTSIDE the published directory. A .md file cannot
+    # carry <meta name="robots">, so a copy inside site/ is reachable and
+    # indexable no matter what the HTML pages declare — and it contains every
+    # name the HTML does. Nothing links to it, so publishing it bought nothing
+    # and quietly defeated the noindex on issue.html.
     ok["issue.html"] = run("intelligence layer issue", [
         py, "build_issue.py", "--days", str(a.days), "--graph", gdb,
-        "--out-md", os.path.join(a.out, "issue.md"),
+        "--out-md", "issue.md",
         "--out-html", os.path.join(a.out, "issue.html"), *demo])
 
     # 4 · shared nav
@@ -140,6 +145,7 @@ def main() -> int:
         if not os.path.exists(p):
             with open(p, "w", encoding="utf-8") as f:
                 f.write(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
 <title>{label} — unavailable</title></head>
 <body style="margin:0;background:{BG};color:#e5e7eb;
  font:14px 'Courier New',monospace">{nav_html(href)}

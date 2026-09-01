@@ -25,6 +25,10 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import suppress
+from sourcelinks import (graph_focus_url, patent_url, safe_url, signal_url,
+                         thesis_url)
+
 # ── Palette (matches dashboard.py: Bloomberg amber-on-black) ──────────────────
 BG = "#050810"
 CARD = "#0d1117"
@@ -123,7 +127,7 @@ def fetch_from_db() -> dict:
         recent_signals = (
             s.query(
                 Signal.event_date, Signal.first_seen_at, Signal.signal_type,
-                Signal.organization, Signal.title, Signal.amount,
+                Signal.organization, Signal.title, Signal.amount, Signal.url,
             )
             .order_by(Signal.first_seen_at.desc())
             .limit(15)
@@ -132,7 +136,7 @@ def fetch_from_db() -> dict:
         recent_theses = (
             s.query(
                 Thesis.year, Thesis.author, Thesis.institution, Thesis.title,
-                Thesis.first_seen_at,
+                Thesis.first_seen_at, Thesis.url, Thesis.doi,
             )
             .order_by(Thesis.first_seen_at.desc())
             .limit(15)
@@ -207,6 +211,11 @@ def fetch_from_db() -> dict:
             "id": r.source_id or "",
             "title": (r.title or "—")[:64],
             "assignee": _assignee(r.assignees),
+            # No ingestor stores a patent URL, so it is constructed from the
+            # publication number. patent_url returns None on anything that
+            # does not parse rather than guessing — a dead link on a page whose
+            # whole argument is provenance is worse than plain text.
+            "url": patent_url(r.source_id, r.source),
         })
     signals_tbl = []
     for r in recent_signals:
@@ -218,14 +227,24 @@ def fetch_from_db() -> dict:
             "org": (r.organization or "")[:34],
             "title": (r.title or "—")[:52],
             "amount": amt,
+            # Scraped from RSS feeds and job boards, so it goes through the
+            # scheme allow-list before it can reach an href.
+            "url": signal_url(r.url),
         })
     theses_tbl = []
+    # Withhold anyone who has asked to be removed. Checked here, at render
+    # time, so a request applies retroactively to the whole stored corpus and
+    # survives the nightly re-ingest. See suppress.py.
+    supp = suppress.load()
     for r in recent_theses:
+        if supp.blocks_person(r.author):
+            continue
         theses_tbl.append({
             "year": str(r.year) if r.year else "",
             "author": (r.author or "")[:26],
             "institution": (r.institution or "")[:30],
             "title": (r.title or "—")[:56],
+            "url": thesis_url(r.url, r.doi),
         })
 
     return {
@@ -258,7 +277,7 @@ def demo_data() -> dict:
         # gentle wave so the sample looks alive
         v = int(6 + 5 * abs(math.sin(i / 2.3)) + (i % 3))
         series.append({"label": d, "value": v})
-    return {
+    d = {
         "generated_at": utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "kpis": {"families": 1284, "patents": 2117, "theses": 486, "signals": 613},
         "last_run_at": today.strftime("%Y-%m-%d 07:00"),
@@ -315,6 +334,26 @@ def demo_data() -> dict:
             {"year": "2025", "author": "L. Moreau", "institution": "EPFL", "title": "Endovascular electrode arrays: modelling and validation"},
         ],
     }
+    return _demo_links(d)
+
+
+def _demo_links(d: dict) -> dict:
+    """
+    Give the illustrative corpus the same link treatment as live data.
+
+    Patents get a constructed Google Patents URL, exactly as the live path
+    does — same function, so the demo exercises the real code rather than a
+    parallel implementation that could drift.
+
+    Signals and theses deliberately get NO url. Their real URLs come from the
+    ingested row, and inventing plausible-looking ones for the demo would put
+    dead links on a page whose entire argument is provenance. Leaving them
+    absent also means the demo build exercises the unlinked branch of _cell(),
+    which is the branch live data hits whenever a feed omits a URL.
+    """
+    for r in d.get("recent_patents", []):
+        r["url"] = patent_url(r.get("id"))
+    return d
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -360,6 +399,10 @@ def load_scored(graph_path: str | None) -> dict:
 
     def _rows(stance, n=8, etype=None):
         return [{
+            # The uuid5 entity id. metrics.py keys its scores by it and
+            # graph_render matches ?focus= against it, so the same value
+            # threads the dashboard to the exact node in the graph.
+            "id": eid,
             "name": r["name"],
             "type": r["type"],
             "est": round(r["establishment"], 1),
@@ -368,18 +411,18 @@ def load_scored(graph_path: str | None) -> dict:
             "layers": len(r["layers"]),
             "valence": r.get("valence"),
             "n_valenced": r.get("n_valenced", 0),
-        } for _, _, r in rank(scores, stance=stance, etype=etype, top=n)]
+        } for _, eid, r in rank(scores, stance=stance, etype=etype, top=n)]
 
     # Affect is reported only where it was actually extracted. An entity with
     # no valenced evidence is not neutral — it is unmeasured, and showing it as
     # 0.0 would manufacture a reading the corpus does not support.
-    valenced = [r for r in scores.values()
+    valenced = [(eid, r) for eid, r in scores.items()
                 if r.get("valence") is not None and r.get("n_valenced", 0) > 0]
-    valenced.sort(key=lambda r: (-abs(r["valence"]), -r["n_valenced"]))
+    valenced.sort(key=lambda kv: (-abs(kv[1]["valence"]), -kv[1]["n_valenced"]))
     affect_rows = [{
-        "name": r["name"], "type": r["type"],
+        "id": eid, "name": r["name"], "type": r["type"],
         "valence": round(r["valence"], 2), "n": r["n_valenced"],
-    } for r in valenced[:10]]
+    } for eid, r in valenced[:10]]
 
     return {
         "available": True,
@@ -474,6 +517,31 @@ def _kpi_tile(label: str, value, accent: str) -> str:
       </div>"""
 
 
+def _cell(c) -> str:
+    """
+    Render one cell. A (text, url) pair becomes a link; anything else is text.
+
+    Every URL reaching here has already passed sourcelinks.safe_url, so the
+    scheme is known to be http(s). The escaping below is still not optional:
+    a legitimate https URL can carry a quote character in its query string,
+    which would close the href attribute and let the rest of the URL become
+    markup.
+    """
+    if isinstance(c, tuple):
+        text, url = c
+        # Validate HERE as well as at the call site. Every current caller
+        # already passes URLs through sourcelinks, but this function is the
+        # last code between a string and an href — and the next caller added
+        # to this file will not necessarily remember. Two independent checks
+        # both have to fail before anything reaches the page.
+        url = safe_url(url)
+        if not url:
+            return _esc(text)
+        return (f'<a class="src" href="{_esc(url)}" target="_blank" '
+                f'rel="noopener noreferrer">{_esc(text)}</a>')
+    return _esc(c)
+
+
 def _table(headers: list[str], rows: list[list], aligns: list[str] | None = None) -> str:
     aligns = aligns or ["left"] * len(headers)
     thead = "".join(f'<th style="text-align:{a}">{_esc(h)}</th>' for h, a in zip(headers, aligns))
@@ -481,7 +549,7 @@ def _table(headers: list[str], rows: list[list], aligns: list[str] | None = None
     if not rows:
         body.append(f'<tr><td colspan="{len(headers)}" class="empty">— no rows yet —</td></tr>')
     for r in rows:
-        tds = "".join(f'<td style="text-align:{a}">{_esc(c)}</td>' for c, a in zip(r, aligns))
+        tds = "".join(f'<td style="text-align:{a}">{_cell(c)}</td>' for c, a in zip(r, aligns))
         body.append(f"<tr>{tds}</tr>")
     return f'<table><thead><tr>{thead}</tr></thead><tbody>{"".join(body)}</tbody></table>'
 
@@ -519,6 +587,22 @@ def _unavailable(reason: str) -> str:
             f'showing stale or invented figures.</span></div>')
 
 
+def _entity_link(r: dict) -> str:
+    """
+    Entity name as a deep link into the knowledge graph.
+
+    An organisation has no canonical public URL, so the useful destination is
+    not an external search — it is the node itself, with its evidence panel
+    open. graph_focus_url carries both the uuid and the display name so the
+    link survives a rebuild that regenerates the ids.
+    """
+    href = graph_focus_url(r.get("id"), r.get("name"))
+    if not href:
+        return _esc(r["name"])
+    return (f'<a class="ent" href="{_esc(href)}" '
+            f'title="open in the knowledge graph">{_esc(r["name"])}</a>')
+
+
 def _scored_card(sc: dict) -> str:
     if not sc.get("available"):
         return _unavailable(sc.get("reason", "unknown"))
@@ -530,7 +614,7 @@ def _scored_card(sc: dict) -> str:
     body = []
     for r in sc["balanced"]:
         body.append(
-            f'<tr><td>{_esc(r["name"])}</td>'
+            f'<tr><td>{_entity_link(r)}</td>'
             f'<td style="color:{DIM}">{_esc(r["type"])}</td>'
             f'<td>{_bar(r["est"], TEAL)}<span style="font-size:10px">{r["est"]:.0f}</span></td>'
             f'<td>{_bar(r["fro"], PURPLE)}<span style="font-size:10px">{r["fro"]:.0f}</span></td>'
@@ -545,7 +629,9 @@ def _scored_card(sc: dict) -> str:
             f'<b style="color:{PURPLE}">FRONTIER</b> = atypical technology pairings '
             f'&times; structural brokerage &times; stage gap. '
             f'Ranked on the geometric mean, so leading requires both. '
-            f'{sc["n_scored"]:,} entities scored.</div>')
+            f'{sc["n_scored"]:,} entities scored. '
+            f'<b>Click any name</b> to open it in the knowledge graph with its '
+            f'evidence panel expanded.</div>')
     return f'<table>{head}{"".join(body)}</table>{note}'
 
 
@@ -557,7 +643,7 @@ def _affect_card(sc: dict) -> str:
     head = ('<tr><th style="text-align:left">Entity</th><th>Type</th>'
             '<th style="text-align:right">Valence</th></tr>')
     body = "".join(
-        f'<tr><td>{_esc(r["name"])}</td>'
+        f'<tr><td>{_entity_link(r)}</td>'
         f'<td style="color:{DIM}">{_esc(r["type"])}</td>'
         f'<td style="text-align:right">{_valence_chip(r["valence"], r["n"])}</td></tr>'
         for r in sc["affect"])
@@ -592,21 +678,39 @@ def render_html(d: dict) -> str:
         _kpi_tile("CURRENT SIGNALS", k["signals"], PURPLE),
     ])
 
-    patents_rows = [[r["date"], r["source"], r["id"], r["title"], r["assignee"]] for r in d["recent_patents"]]
-    signals_rows = [[r["date"], r["type"], r["org"], r["title"], r["amount"]] for r in d["recent_signals"]]
-    theses_rows = [[r["year"], r["author"], r["institution"], r["title"]] for r in d["recent_theses"]]
+    # The title is the link target in all three tables: it is the largest
+    # click area, it is what a reader is actually looking at, and keeping the
+    # position consistent across tables means nobody has to hunt for it.
+    patents_rows = [[r["date"], r["source"], r["id"],
+                     (r["title"], r.get("url")), r["assignee"]]
+                    for r in d["recent_patents"]]
+    signals_rows = [[r["date"], r["type"], r["org"],
+                     (r["title"], r.get("url")), r["amount"]]
+                    for r in d["recent_signals"]]
+    theses_rows = [[r["year"], r["author"], r["institution"],
+                    (r["title"], r.get("url"))]
+                   for r in d["recent_theses"]]
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, noimageindex">
 <title>NIA Terminal — Snapshot {_esc(d['generated_at'])}</title>
 <style>
   * {{ box-sizing: border-box; }}
   body {{ margin:0; background:{BG}; color:{TEXT}; font-family:{MONO};
          -webkit-font-smoothing:antialiased; padding:22px; }}
   a {{ color:{AMBER}; text-decoration:none; }}
+  /* Source links. The arrow glyph, not colour alone, is what marks a cell as
+     clickable — the tables are already amber-on-dark and a colour-only cue
+     would be invisible to a reader who cannot separate those hues. */
+  a.src {{ color:{TEXT}; border-bottom:1px dotted {BORDER}; }}
+  a.src:hover {{ color:{AMBER}; border-bottom-color:{AMBER}; }}
+  a.src::after {{ content:' ↗'; font-size:9px; opacity:.7; color:{AMBER}; }}
+  a.ent {{ color:inherit; border-bottom:1px dotted {BORDER}; }}
+  a.ent:hover {{ color:{AMBER}; border-bottom-color:{AMBER}; }}
   .wrap {{ max-width:1200px; margin:0 auto; }}
   header {{ display:flex; align-items:baseline; justify-content:space-between;
             gap:16px; flex-wrap:wrap; border-bottom:1px solid {BORDER}; padding-bottom:14px; }}
@@ -691,6 +795,10 @@ def main() -> None:
     args = ap.parse_args()
 
     data = demo_data() if args.demo else fetch_from_db()
+    if not args.demo:
+        _s = suppress.load()
+        print(f"[snapshot] suppression list: {_s.summary()}"
+              + (f" — {_s.hits} withheld this build" if _s.hits else ""))
     data["scored"] = load_scored(args.graph)
     if not data["scored"].get("available"):
         print(f"[snapshot] scored view unavailable: "

