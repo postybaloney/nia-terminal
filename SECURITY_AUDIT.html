@@ -193,9 +193,31 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
     <span><b>Target</b> parthrudesai.com/nia-terminal/</span>
     <span><b>Repo</b> github.com/postybaloney/nia-terminal (public)</span>
     <span><b>Date</b> 22 August 2026</span>
-    <span><b>Findings</b> 14</span>
+    <span><b>Findings</b> 14 &middot; 5 closed 24 Aug</span>
   </div>
 </header>
+
+<div class="callout" style="border-left:4px solid var(--sev-2);background:var(--sev-2-bg)">
+  <h3>Updated 24 August &mdash; two corrections and five findings closed</h3>
+  <p><b>The original report assumed no legal entity. There is one:</b> a South
+  Carolina LLC. That changes two things. An LLC makes the activity look
+  commercial, which weakens the non-commercial carve-outs in findings 06 and
+  09 and the legitimate-interests balance in finding 03 &mdash; so naming it as
+  the controller on the privacy notice is a real decision, not a formality.
+  And it does not shield you from a claim arising from something you
+  personally wrote, which for a one-person publishing operation is most of
+  them.</p>
+  <p><b>South Carolina has no anti-SLAPP statute.</b> The report told you to
+  check; the answer is that it is one of the states without one. Three attempts
+  to pass one failed, most recently in 2018. The Frivolous Civil Proceedings
+  Act allows sanctions and fees but requires a much higher showing and offers
+  no early dismissal. Practically: a meritless suit over the affect layer
+  cannot be disposed of cheaply, which raises the cost of the one row in the
+  risk table that was already the expensive one. That makes finding 01 and the
+  framing in the terms of use more load-bearing, not less.</p>
+  <p><b>Closed 24 August:</b> findings 01, 02, 13 in full, and the code half of
+  05 and 10. Details at each finding.</p>
+</div>
 
 <div class="callout flag">
   <h3>What this report cannot do</h3>
@@ -240,7 +262,7 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
       <div class="f-head">
         <span class="f-id">01</span>
         <h3>Evidence quotes are not verified as quotes, and the check passes entity swaps</h3>
-        <span class="chip s1">Critical</span>
+        <span class="chip s4">Closed 24 Aug</span>
       </div>
       <p>The affect layer publishes, next to each named company, a sentiment label, a numeric valence, and an <code>evidence</code> span presented to the reader as a quotation from the source article. <code>verify_grounding()</code> in <code>affect.py</code> is supposed to guarantee the model actually quoted rather than invented.</p>
       <p>It does not. Its fallback branch accepts any span where 80% of the four-letter-or-longer words appear <em>anywhere</em> in the source. That is a bag-of-words test: it has no notion of word order, of which entity a clause attaches to, or of negation.</p>
@@ -263,6 +285,18 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
         <p><b>Fix.</b> Require an exact substring match against the normalised source text, and delete the 80%-overlap fallback entirely. If the model paraphrased, drop the entity rather than publishing the paraphrase as a quote.</p>
         <p>The paraphrases you lose are worth losing: an entity whose evidence cannot be quoted verbatim is an entity whose verdict you cannot show your work for. This is a few lines, it is mechanically testable, and it eliminates the whole category.</p>
       </div>
+      <span class="label">Resolved 24 August</span>
+      <p style="margin-bottom:0">The 80%-overlap branch is gone; a span is now
+      published only if it is a literal substring of the normalised source.
+      Normalisation folds curly quotes, dash variants and Unicode spaces by
+      codepoint range rather than by a list &mdash; U+2011, the non-breaking
+      hyphen, was silently rejecting every quote from any publication whose CMS
+      emits it, which is the failure mode a hand-maintained list produces.
+      Spans under 20 characters are refused as too short to be evidence, and
+      each drop is recorded with a reason so a batch that discards everything
+      reads as a prompting problem rather than a quiet corpus. All three attack
+      cases &mdash; entity swap, negation flip, word salad &mdash; now drop, and
+      are locked in <code>affect.py --selftest</code>.</p>
     </div>
   </div>
 </section>
@@ -276,7 +310,7 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
       <div class="f-head">
         <span class="f-id">02</span>
         <h3>A typo in <code>requirements.txt</code> installs an abandoned package into the runner that holds every secret</h3>
-        <span class="chip s2">High</span>
+        <span class="chip s4">Closed 24 Aug</span>
       </div>
       <p>Line 5 of <code>requirements.txt</code> is a bare <code>db</code>. Your local <code>db/</code> package directory exists, so this was meant as a note to self. pip reads it as an instruction to install the PyPI project named <code>db</code>.</p>
       <p>That project is real: <em>"Databases for Humans"</em>, last released version 0.1.1 on <b>13 December 2014</b>, unmaintained for over a decade. Every CI run and every fresh <code>pip install -r requirements.txt</code> downloads and installs it.</p>
@@ -284,6 +318,11 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
       <div class="fix">
         <p><b>Fix.</b> Delete the line. Then rotate nothing and worry not — this is a latent risk, not evidence of compromise. But delete it today; it costs one keystroke and it is the single highest-leverage line in this report.</p>
       </div>
+      <span class="label">Resolved 24 August</span>
+      <p style="margin-bottom:0">Line removed, with a comment in its place
+      explaining that <code>db/</code> is a local package and why the bare name
+      must not come back &mdash; the line looked like a legitimate dependency to
+      anyone reading the import list.</p>
     </div>
   </div>
 
@@ -296,6 +335,23 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
         <span class="chip s2">High</span>
       </div>
       <p>The live page names, among others, Angelika Myśliwiec, Inês Afonso Gonçalves, Jordi Fornt, Kenza Oussalah, Simone Priori, Alexandre Herrero Matias and David Khachaturov — with institution, work title and date. The knowledge graph then links each person to their employer and to technology areas.</p>
+      <p><b>Corrected 11 September: the count of 17 was low, and only counted
+      the dashboard.</b> A production build reports 4,262 <code>PERSON</code>
+      entities in the graph database, of which <b>150 are embedded in the
+      published <code>graph.html</code></b> — the renderer describes them as
+      "hidden until selected", but that is a UI state, not a privacy control:
+      the names are in the file, readable by anyone who opens the source. So
+      the published headcount is roughly an order of magnitude above what this
+      finding originally said.</p>
+      <p>The remedies do not change — <code>noindex</code>, the privacy notice
+      and the suppression list all operate on names regardless of how many
+      there are, and <code>suppress.py</code> blocks at
+      <code>add_entity</code>, so a request removes a person from the graph
+      payload as well as from the tables. What changes is the weight: an
+      Article 14 "disproportionate effort" argument reads differently at 150
+      published individuals than at 17, and <em>4,262 stored</em> is the number
+      that matters if anyone ever asks what the database holds rather than what
+      the page shows.</p>
       <p>Three things follow that are worth being precise about, because the intuitive defences all fail:</p>
       <ul>
         <li><b>"It was already public" is not a defence.</b> The EDPB's <a href="https://www.edpb.europa.eu/system/files/2026-07/edpb_guidelines_2020603_webscraping_v1_en_0.pdf">Guidelines 03/2026</a> put it directly: making data available online "does not mean that the data subjects gave their consent to the scraping of their personal data for a specific purpose."</li>
@@ -340,6 +396,14 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
       <p>Redistribution is permitted, but the <a href="https://clinicaltrials.gov/about-site/terms-conditions">terms</a> attach four conditions that are operative, not optional: attribute the source as ClinicalTrials.gov; keep the data current at all times; <em>clearly display the date the data were processed</em>; and state any modifications with a complete description. NLM's overlapping terms add the phrase <em>"Courtesy of the U.S. National Library of Medicine."</em></p>
       <p>A nightly cache with no processing date and no attribution meets none of them. This is the easiest breach on the list to fix and the easiest to notice.</p>
       <div class="fix"><p><b>Fix.</b> An attribution block in the footer plus a per-source "data processed on" stamp. Both are already in your data model.</p></div>
+      <span class="label">Partly resolved 24 August</span>
+      <p style="margin-bottom:0">A sources page now carries all four conditions
+      and the NLM courtesy line, with the processing date <em>generated</em> at
+      build time &mdash; <code>build_legal.py</code> refuses to substitute a
+      hand-written one, because a hardcoded date is correct for a day and then
+      becomes a false statement made specifically to satisfy the condition.
+      Still open: the page is built but not linked from the site nav, at your
+      request, so the attribution is not yet reaching readers.</p>
     </div>
   </div>
 
@@ -366,6 +430,29 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
         <li><b>Referrer-Policy</b> is a privacy issue. Every outbound source link currently sends the full referring URL to a third party — including <code>graph.html?focus=…&amp;name=…</code> when someone deep-links into an entity. That is your own page structure leaking to Google, the FDA, NIH and every publisher you link to.</li>
       </ul>
       <div class="fix"><p><b>Fix.</b> Cloudflare is already in front of the domain, so both are a Transform Rule rather than a code change. <code>Referrer-Policy: strict-origin-when-cross-origin</code> and <code>X-Content-Type-Options: nosniff</code> are free; CSP needs one pass to allow the inline styles and scripts the generators emit.</p></div>
+      <span class="label">Values derived and tested 9 September &mdash; awaiting application</span>
+      <p>The pass found the pages are <em>fully</em> self-contained: across all
+      six, zero external scripts, stylesheets or images, zero
+      <code>fetch</code>/XHR/WebSocket/beacon calls, and zero inline
+      <code>on*</code> attributes. That allows a much tighter policy than
+      usual, and in particular <code>connect-src 'none'</code> &mdash; the
+      pages make no network requests, so forbidding them costs nothing and
+      means injected JavaScript has nowhere to send what it steals.
+      Exfiltration is the actual harm.</p>
+      <p><code>'unsafe-inline'</code> remains, because <code>graph.html</code>
+      is deliberately a single self-contained file. So this does not stop an
+      injected inline script <em>running</em>; it stops it reaching anything.
+      Removing it means externalising the graph's payload and losing the
+      single-file property &mdash; worth doing eventually, not worth blocking
+      the headers on.</p>
+      <p style="margin-bottom:0">All four headers were served against all six
+      pages and checked for violations, JS errors, and whether each page still
+      <em>functioned</em> rather than merely loaded: zero, zero, and the graph
+      still interactive. Exact values and the dashboard click-path are in
+      <code>CLOUDFLARE_HEADERS.md</code> &mdash; including the one trap, which
+      is that the rule must use <b>Set static</b> and not <b>Add</b>, or
+      Cloudflare&rsquo;s own client-side security adds a second CSP and the
+      browser enforces both.</p>
     </div>
   </div>
 
@@ -394,10 +481,10 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
     <table>
       <thead><tr><th>#</th><th>Finding</th><th>Fix</th></tr></thead>
       <tbody>
-        <tr><td class="num">10</td><td>Google Patents BigQuery is CC BY 4.0 and requires crediting <b>both IFI CLAIMS Patent Services and Google</b>. No attribution appears anywhere on the site. Other tables in that project carry different licences — ChEMBL is CC BY-SA 3.0, which is share-alike and viral.</td><td>Add the credit string; check the licence per table you query.</td></tr>
+        <tr><td class="num">10</td><td>Google Patents BigQuery is CC BY 4.0 and requires crediting <b>both IFI CLAIMS Patent Services and Google</b>. No attribution appears anywhere on the site. Other tables in that project carry different licences — ChEMBL is CC BY-SA 3.0, which is share-alike and viral.</td><td><b style="color:var(--sev-4)">Drafted.</b> Credit string for both parties is on the sources page; still unlinked.</td></tr>
         <tr><td class="num">11</td><td>The graph tooltip escapes node names but interpolates <code>n.t</code> and <code>n.s</code> raw. Both are a fixed internal vocabulary today, so this is not exploitable — it is an unguarded path next to three that were.</td><td>Wrap both in <code>esc()</code>.</td></tr>
         <tr><td class="num">12</td><td><code>sitemap.xml</code> advertises <code>/privacy</code> and <code>/terms</code>. Both return <b>404</b>. Whatever was intended there was never published.</td><td>Publish them &mdash; drafts accompany this report.</td></tr>
-        <tr><td class="num">13</td><td>The terminal is fully crawlable (<code>Allow: /</code>) but <b>not yet indexed</b>. AI crawlers are blocked; Googlebot is not. The sitemap does not list the terminal, so nothing is actively pushing it into the index.</td><td>Add <code>noindex</code> until findings 01&ndash;03 are closed. This is the cheapest single risk reduction available.</td></tr>
+        <tr><td class="num">13</td><td><b style="color:var(--sev-4)">CLOSED 24 Aug.</b> <code>noindex, nofollow, noarchive</code> now on all three pages and on the failure placeholders. Also found and fixed: <code>issue.md</code> was published alongside them and <b>cannot carry a meta tag</b>, so it was indexable regardless &mdash; it now builds outside the published directory. Originally: the terminal was fully crawlable (<code>Allow: /</code>) but <b>not yet indexed</b>. AI crawlers are blocked; Googlebot is not. The sitemap does not list the terminal, so nothing is actively pushing it into the index.</td><td>Add <code>noindex</code> until findings 01&ndash;03 are closed. This is the cheapest single risk reduction available.</td></tr>
         <tr><td class="num">14</td><td>"NIA" collides with the NIH's <b>National Institute on Aging</b>, which uses the same acronym in the same broad field. A site publishing NIH grant data under that acronym invites confusion, and the branding cost of changing it rises with every person you show it to.</td><td>Decide now rather than later.</td></tr>
       </tbody>
     </table>
@@ -450,10 +537,10 @@ footer.end{border-top:1px solid var(--rule); margin-top:70px; padding-top:26px; 
   <p class="sec-lede">The first four are an afternoon and remove most of the tail. Nothing below needs to wait for a lawyer.</p>
 
   <ol class="steps">
-    <li><b>Delete the <code>db</code> line from <code>requirements.txt</code>.</b> One keystroke, closes finding 02.</li>
-    <li><b>Add <code>noindex</code> to all three pages.</b> Buys unlimited time on everything GDPR-shaped without changing who you can share the link with.</li>
-    <li><b>Fix the evidence-span check to require exact substring matching.</b> Closes the only finding that can realistically become a lawsuit.</li>
-    <li><b>Publish the privacy notice, terms, and sources page</b> — drafted alongside this report — and put a real monitored address on all three. Almost every realistic complaint terminates at that address for free.</li>
+    <li><s><b>Delete the <code>db</code> line.</b></s> Done 24 Aug.</li>
+    <li><s><b>Add <code>noindex</code>.</b></s> Done 24 Aug, plus <code>issue.md</code> moved out of the published directory.</li>
+    <li><s><b>Require verbatim evidence spans.</b></s> Done 24 Aug, with the three attack cases locked in tests.</li>
+    <li><b>Publish the legal pages.</b> Built and rendering, <em>not yet linked</em>. Three things still block publication: set <code>privacy@parthrudesai.com</code> live as a real forward; decide whether the LLC or you personally is the controller; and get a lawyer to read them. A <code>suppress.py</code> list now backs the removal promise, so that commitment is real rather than aspirational.</li>
     <li><b>Add Referrer-Policy and nosniff via Cloudflare</b>, then a CSP once you have checked it against all three generated pages.</li>
     <li><b>Pin dependencies and enable Dependabot.</b></li>
     <li><b>Stop storing feed body text and abstracts from bioRxiv and medRxiv.</b> Link instead.</li>
