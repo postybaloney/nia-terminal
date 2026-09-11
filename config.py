@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     # of sharing one with the digests.
     affect_model: str = ""
 
+    # ── Legal pages ───────────────────────────────────────────────────────────
+    # build_legal.py renders legal/*.md into the site. It REFUSES to substitute
+    # a blank, so leaving these unset means the pages are skipped rather than
+    # published with an empty controller or contact address — a legal page with
+    # a hole in it is a dated public commitment that visibly cannot be kept.
+    legal_controller: str = ""      # the entity or person named as controller
+    legal_location: str = ""        # e.g. "South Carolina"
+    legal_state: str = ""           # governing law for the terms
+    legal_contact: str = ""         # a REAL, monitored address
+    # Off until the contact address is live, the controller question is settled
+    # and a lawyer has read them. Generating the pages is safe; linking them
+    # from every page is the act of publishing them.
+    legal_link_in_nav: bool = False
+
     # API keys — only the one matching LLM_BACKEND is required
     groq_api_key: str = ""
     gemini_api_key: str = ""

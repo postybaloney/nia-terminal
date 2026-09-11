@@ -218,6 +218,33 @@ run spent most of its wall-clock retrying 429s rather than working.
 
 Two knobs now exist:
 
+### Legal pages
+
+`build_site.py` renders `legal/*.md` into the site whenever these four are set,
+and skips them with a message when they are not — a half-configured legal
+identity must never be able to take the nightly build down.
+
+| Variable | What it does |
+|---|---|
+| `LEGAL_CONTROLLER` | The entity or person named as data controller. |
+| `LEGAL_LOCATION` | Shown in the privacy notice. |
+| `LEGAL_STATE` | Governing law for the terms. |
+| `LEGAL_CONTACT` | A **real, monitored** address. The removal promise is worthless without one. |
+| `LEGAL_LINK_IN_NAV` | `false` by default. Generating the pages is safe; **linking them from every page is the act of publishing them.** Flip this only once the address is live, the controller question is settled and a lawyer has read them. |
+
+`build_legal.py` refuses to substitute a blank value, so a missing setting
+produces a skipped page rather than one with a hole in it.
+
+**When a removal request arrives:**
+
+```bash
+python suppress.py --add "Their Name" --note "email 2026-09-09"
+python build_site.py          # the rebuild is what makes it take effect
+git add -A && git commit -m "Suppression request" && git push
+```
+
+### LLM
+
 | Variable | Default | What it does |
 |---|---|---|
 | `LLM_TOKENS_PER_MINUTE` | `8000` | The budget the affect pass paces itself against. Raise it if you upgrade the Groq tier; it only affects spacing between calls. |

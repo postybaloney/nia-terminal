@@ -50,6 +50,19 @@ jobs:
       AFFECT_MODEL:          ${{ secrets.AFFECT_MODEL }}
       # Tokens/minute the affect pass paces itself against. 8000 = Groq free.
       LLM_TOKENS_PER_MINUTE: ${{ secrets.LLM_TOKENS_PER_MINUTE }}
+      # ── Legal pages ───────────────────────────────────────────────────────
+      # build_site.py renders legal/*.md only when all four of the first ones
+      # are set, and SKIPS them with a message otherwise — a half-configured
+      # legal identity must not be able to fail the nightly build.
+      # LEGAL_LINK_IN_NAV is the publish switch: generating the pages is safe,
+      # linking them from every page is the act of publishing them. Leave it
+      # unset until the contact address is live, the controller question is
+      # settled, and a lawyer has read them.
+      LEGAL_CONTROLLER:  ${{ secrets.LEGAL_CONTROLLER }}
+      LEGAL_LOCATION:    ${{ secrets.LEGAL_LOCATION }}
+      LEGAL_STATE:       ${{ secrets.LEGAL_STATE }}
+      LEGAL_CONTACT:     ${{ secrets.LEGAL_CONTACT }}
+      LEGAL_LINK_IN_NAV: ${{ secrets.LEGAL_LINK_IN_NAV }}
       GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
       OPENFDA_API_KEY:   ${{ secrets.OPENFDA_API_KEY }}    # optional
       EPO_CLIENT_ID:     ${{ secrets.EPO_CLIENT_ID }}      # optional

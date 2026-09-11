@@ -35,10 +35,21 @@ PAGES = [
     ("issue.html", "Intelligence Layer"),
 ]
 
+# Appended to the nav only when LEGAL_LINK_IN_NAV is true. Kept separate from
+# PAGES because PAGES also drives the "generator failed, leave a placeholder"
+# loop — and a missing legal page should mean "not configured", not "broken".
+LEGAL_PAGES = [
+    ("privacy.html", "Privacy"),
+    ("terms.html", "Terms"),
+    ("sources.html", "Sources"),
+]
+
+_EXTRA_NAV: list[tuple[str, str]] = []
+
 
 def nav_html(current: str) -> str:
     parts = []
-    for href, label in PAGES:
+    for href, label in PAGES + _EXTRA_NAV:
         cls = ' class="on"' if href == current else ""
         parts.append(f'<a href="{href}"{cls}>{label}</a>')
     links = "".join(parts)
@@ -132,9 +143,45 @@ def main() -> int:
         "--out-md", "issue.md",
         "--out-html", os.path.join(a.out, "issue.html"), *demo])
 
-    # 4 · shared nav
+    # 4 · legal pages — generated whenever they are configured.
+    #     Deliberately NOT fatal when unconfigured: a half-set-up legal identity
+    #     must not be able to take the whole nightly build down.
+    legal_pages: list[tuple[str, str]] = []
+    try:
+        from config import settings
+        cfg = [settings.legal_controller, settings.legal_location,
+               settings.legal_state, settings.legal_contact]
+    except Exception as exc:
+        cfg = []
+        print(f"  ── legal pages skipped (config unavailable: {exc})")
+    if cfg and all(cfg):
+        if run("legal pages", [
+                py, "build_legal.py", "--out", a.out,
+                "--controller", settings.legal_controller,
+                "--location", settings.legal_location,
+                "--state", settings.legal_state,
+                "--contact", settings.legal_contact]):
+            legal_pages = LEGAL_PAGES
+            if not settings.legal_link_in_nav:
+                print("     built but NOT linked — set LEGAL_LINK_IN_NAV=true "
+                      "to publish them")
+    elif cfg:
+        missing = [n for n, v in zip(
+            ("LEGAL_CONTROLLER", "LEGAL_LOCATION", "LEGAL_STATE",
+             "LEGAL_CONTACT"), cfg) if not v]
+        print(f"  ── legal pages skipped — unset: {', '.join(missing)}")
+
+    # 5 · shared nav
     print("  ── linking pages")
-    for href, _ in PAGES:
+    global _EXTRA_NAV
+    if legal_pages:
+        try:
+            from config import settings as _s
+            if _s.legal_link_in_nav:
+                _EXTRA_NAV = legal_pages
+        except Exception:
+            pass
+    for href, _ in PAGES + _EXTRA_NAV:
         p = os.path.join(a.out, href)
         if os.path.exists(p):
             inject_nav(p, href)
