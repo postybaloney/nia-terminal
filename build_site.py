@@ -101,6 +101,33 @@ def run(label: str, cmd: list[str]) -> bool:
     return True
 
 
+def clear(*paths: str) -> None:
+    """
+    Delete a generator's output before running it.
+
+    This exists because of a silent three-week failure. `site/` is committed to
+    the repo, so a CI checkout restores the PREVIOUS build's HTML before the
+    generators run. When build_issue.py then failed, the placeholder logic
+    below did nothing — it only writes a placeholder when the file is ABSENT,
+    and the stale file from the last successful run was sitting right there.
+    That stale page was uploaded to Pages and served as current.
+
+    The result: parthrudesai.com served an "Intelligence Layer" dated
+    2026-08-18 for three weeks, beside a dashboard dated 2026-09-11, while
+    every workflow run reported success. A failing generator was invisible.
+
+    Deleting first makes failure look like failure. The placeholder then fires
+    as it was always supposed to, and the page says so rather than lying.
+    """
+    for p in paths:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"  !! could not clear {p}: {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="site")
@@ -119,6 +146,7 @@ def main() -> int:
     #     SQLite file; building the dashboard before the graph (the original
     #     order) meant those cards could only ever render "not available".
     gdb = os.path.join(a.out, "nia_graph.sqlite")
+    clear(os.path.join(a.out, "graph.html"))
     built = run("knowledge graph (build)", [py, "graph_build.py", "--out", gdb, *demo])
     ok["graph.html"] = built and run("knowledge graph (render)", [
         py, "graph_render.py", "--db", gdb,
@@ -128,6 +156,7 @@ def main() -> int:
     # 2 · dashboard — reads the graph for establishment/frontier/affect.
     #     --graph is passed even when the build failed: build_snapshot degrades
     #     to an explicit "not available" note, which is the correct output.
+    clear(os.path.join(a.out, "index.html"))
     ok["index.html"] = run("dashboard snapshot", [
         py, "build_snapshot.py", "--out", os.path.join(a.out, "index.html"),
         "--graph", gdb, *demo])
@@ -138,6 +167,7 @@ def main() -> int:
     # indexable no matter what the HTML pages declare — and it contains every
     # name the HTML does. Nothing links to it, so publishing it bought nothing
     # and quietly defeated the noindex on issue.html.
+    clear(os.path.join(a.out, "issue.html"))
     ok["issue.html"] = run("intelligence layer issue", [
         py, "build_issue.py", "--days", str(a.days), "--graph", gdb,
         "--out-md", "issue.md",
@@ -187,9 +217,11 @@ def main() -> int:
             inject_nav(p, href)
 
     # 5 · if a page failed, leave a real placeholder rather than a broken link
+    stale_guard = []
     for href, label in PAGES:
         p = os.path.join(a.out, href)
         if not os.path.exists(p):
+            stale_guard.append(href)
             with open(p, "w", encoding="utf-8") as f:
                 f.write(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow, noarchive">

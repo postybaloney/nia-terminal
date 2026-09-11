@@ -13,7 +13,14 @@ as a rating OF the company. Do not let that drift in future edits — a score
 presented as measuring the company itself starts to look like a verifiable
 factual claim about creditworthiness, which is defamation per se territory.
 
-Fill four ‹PLACEHOLDERS›. Decide the ⚠ OPEN item in section 3.
+Set the four LEGAL_* environment variables; build_legal.py refuses blanks.
+
+RESOLVED 11 Sep 2026 — the ⚠ OPEN item that used to sit in section 3 is closed.
+verify_grounding() in affect.py now requires an exact substring match against
+the normalised source and drops anything else, so section 3's claim that the
+displayed passage is a real quote is true. It was NOT true when this was
+drafted, and it is the one sentence here that must be re-checked if that
+function is ever loosened.
 ═══════════════════════════════════════════════════════════════════════════════
 -->
 
@@ -88,13 +95,11 @@ and a link to the source. **Read the passage and the source rather than the
 number.** Where the passage and the number seem to disagree, the passage is the
 evidence and the number is our system's fallible reading of it.
 
-> ⚠ **OPEN — decide before publishing.** This section is only true if the
-> published quote is verbatim from the source. As of ‹DATE› the grounding check
-> also admits close paraphrases, which means a displayed "quote" may not be
-> exactly what the source said. Fix that first, or remove the word "quoted"
-> from this section. Publishing a paraphrase inside quotation marks while
-> telling readers to rely on it is the one thing in this document that could
-> actively make matters worse.
+Every published passage is a **literal substring of the source document**,
+checked automatically before it is shown. Where a passage cannot be quoted
+exactly, the entity is dropped rather than paraphrased — so a passage shown in
+quotation marks on this site is what the source actually said, and nothing
+appears here that could not be verified against the original.
 
 ### Establishment and Frontier scores
 
@@ -191,8 +196,11 @@ REMOVE BEFORE PUBLISHING — implementation notes
     commentary; a ranking naming the "worst" company is a different and much
     worse posture.
 
-  ▸ The ⚠ OPEN item in section 3 is finding 01 in the audit report. Fixing the
-    code is strictly better than weakening this document.
+  ▸ Section 3's verbatim claim is only as true as verify_grounding(). If that
+    function is ever relaxed to admit paraphrases again, this section becomes
+    a false statement in a legal document. affect.py --selftest covers the
+    three cases that matter (entity swap, negation flip, word salad); treat a
+    failure there as a documentation bug as well as a code one.
 
   ▸ Section 6's promise of removal on request is deliberate. For a hobby
     project the cost of complying instantly is near zero and the cost of a

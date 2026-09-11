@@ -5,10 +5,23 @@ DRAFT — NOT YET PUBLISHABLE. DELETE THIS BLOCK BEFORE PUBLISHING.
 This is a working draft prepared from research, not legal advice, and it has
 not been reviewed by a lawyer. Before publishing you must:
 
-  1. Fill every ‹ANGLE-BRACKET PLACEHOLDER› below. There are five.
-  2. Decide the two open questions marked ⚠ OPEN in the text.
-  3. Have a lawyer read it, ideally in the same session as the EPO terms
-     question and the media-liability-insurance conversation.
+  1. Set LEGAL_CONTROLLER / LEGAL_LOCATION / LEGAL_STATE / LEGAL_CONTACT.
+     build_legal.py refuses to substitute a blank, so a missing one produces
+     a skipped page rather than one with a hole in it.
+  2. One ⚠ OPEN question remains, in section 1 — the Article 27 EU
+     representative. It is for your lawyer, not for you to guess.
+  3. Have a lawyer read the whole thing, ideally in the same session as the
+     EPO terms question and the media-liability-insurance conversation.
+
+RESOLVED 11 Sep 2026 — the controller is the individual, in his own name, not
+Epsilon Solutions LLC. Controller is not an elective label: GDPR Art 4(7) makes
+it whoever in fact determines the purposes and means, which here is a person
+rather than the company. Naming the LLC would also have imported a commercial
+framing that costs the DSM Art 15 non-commercial carve-out, fair use factor
+one, and the Art 6(1)(f) balance — while shielding nothing, because a one-person
+publishing operation is personally liable for what it personally publishes.
+If the LLC ever genuinely takes the project over, this decision and the
+"non-commercial research project" sentence in section 1 both have to change.
 
 The single most important thing in this document is not the legal recitation —
 it is the removal commitment in section 7. That is what converts almost every
@@ -34,15 +47,6 @@ explanation is required.
 
 The NIA Terminal is a non-commercial research project. It sells nothing,
 carries no advertising, and is not offered as a product or service.
-
-> ⚠ **OPEN — decide before publishing.** Name the controller correctly. If the
-> site is operated by your LLC, the LLC is the controller and its registered
-> name belongs in the table below. If the LLC exists for other work and this
-> project is personal, you are the controller in your own name. Do not put the
-> LLC here for the appearance of separation: it makes the activity look
-> commercial, which weakens the non-commercial carve-outs this project
-> currently relies on, and it does not shield you from a claim arising from
-> something you personally wrote and published.
 
 | | |
 |---|---|
@@ -248,4 +252,7 @@ TWO OPEN QUESTIONS FOR THE LAWYER:
      It is member-state law across 27 jurisdictions. If it is available it
      changes this analysis substantially; if it is not, section 5's
      legitimate-interests basis is doing all the work alone.
+
+  (The controller question that used to sit here was settled on 11 Sep 2026:
+  the individual, not the LLC. See the note at the top of this file.)
 -->
